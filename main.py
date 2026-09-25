@@ -2,7 +2,6 @@ import discord
 from discord.ext import commands
 import aiohttp
 import asyncio
-import re
 import urllib.parse
 import os
 from dotenv import load_dotenv
@@ -10,23 +9,17 @@ from dotenv import load_dotenv
 load_dotenv()
 
 TOKEN = os.getenv("TOKEN")
-
 GUILD_ID = int(os.getenv("GUILD_ID"))
-CHANNEL_ID = int(os.getenv("CHANNEL_ID"))
 
 API_URL = "https://doitenroi.win/api/bypass?url="
 
 if not TOKEN:
     raise ValueError("Missing TOKEN in .env")
 
+intents = discord.Intents.default()
 
-intents = discord.Intents.all()
-
-bot = commands.Bot(
-    command_prefix=commands.when_mentioned,
-    intents=intents,
-    help_command=None
-)
+bot = discord.Client(intents=intents)
+tree = discord.app_commands.CommandTree(bot)
 
 
 class CopyButton(discord.ui.Button):
@@ -50,13 +43,9 @@ class ProcessingView(discord.ui.LayoutView):
 
         self.add_item(
             discord.ui.Container(
-                discord.ui.TextDisplay(
-                    "# Processing..."
-                ),
+                discord.ui.TextDisplay("# Processing..."),
                 discord.ui.Separator(),
-                discord.ui.TextDisplay(
-                    "Please wait while I bypass the link."
-                )
+                discord.ui.TextDisplay("Please wait while I bypass the link.")
             )
         )
 
@@ -67,13 +56,9 @@ class SuccessView(discord.ui.LayoutView):
 
         self.add_item(
             discord.ui.Container(
-                discord.ui.TextDisplay(
-                    "# Success!"
-                ),
+                discord.ui.TextDisplay("# Success!"),
                 discord.ui.Separator(),
-                discord.ui.TextDisplay(
-                    f"```\n{result}\n```"
-                ),
+                discord.ui.TextDisplay(f"```\n{result}\n```"),
                 discord.ui.Separator(),
                 discord.ui.ActionRow(
                     CopyButton(result)
@@ -88,115 +73,94 @@ class FailedView(discord.ui.LayoutView):
 
         self.add_item(
             discord.ui.Container(
-                discord.ui.TextDisplay(
-                    "# Failed!"
-                ),
+                discord.ui.TextDisplay("# Failed!"),
                 discord.ui.Separator(),
-                discord.ui.TextDisplay(
-                    message
-                )
+                discord.ui.TextDisplay(message)
             )
+        )
+
+
+class PingView(discord.ui.LayoutView):
+    def __init__(self, latency):
+        super().__init__(timeout=None)
+
+        self.add_item(
+            discord.ui.Container(
+                discord.ui.TextDisplay("# Pong!"),
+                discord.ui.Separator(),
+                discord.ui.TextDisplay(f"Latency: **{latency}ms**")
+            )
+        )
+
+
+@tree.command(
+    name="ping",
+    description="Check bot latency",
+    guild=discord.Object(id=GUILD_ID)
+)
+async def ping(interaction: discord.Interaction):
+    latency = round(bot.latency * 1000)
+    await interaction.response.send_message(
+        view=PingView(latency)
+    )
+
+
+@tree.command(
+    name="bypass",
+    description="Bypass a link",
+    guild=discord.Object(id=GUILD_ID)
+)
+@discord.app_commands.describe(link="The link to bypass")
+async def bypass(interaction: discord.Interaction, link: str):
+    await interaction.response.send_message(
+        view=ProcessingView()
+    )
+
+    try:
+        encoded = urllib.parse.quote(link, safe="")
+
+        timeout = aiohttp.ClientTimeout(total=120)
+
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with session.get(API_URL + encoded) as res:
+                data = await res.json(content_type=None)
+
+                status = data.get("status")
+
+                if status == "success":
+                    result = data.get("result")
+                    await interaction.edit_original_response(
+                        view=SuccessView(result)
+                    )
+
+                elif status in ("failed", "error"):
+                    await interaction.edit_original_response(
+                        view=FailedView(
+                            data.get("message", "Failed to bypass")
+                        )
+                    )
+
+                else:
+                    await interaction.edit_original_response(
+                        view=FailedView("Invalid API response.")
+                    )
+
+    except asyncio.TimeoutError:
+        await interaction.edit_original_response(
+            view=FailedView("API request timed out.")
+        )
+
+    except Exception as e:
+        print("Error:", e)
+        await interaction.edit_original_response(
+            view=FailedView(str(e))
         )
 
 
 @bot.event
 async def on_ready():
+    await tree.sync(guild=discord.Object(id=GUILD_ID))
     print(f"Logged in as {bot.user}")
-
-
-@bot.event
-async def on_message(message):
-    if message.author.bot:
-        return
-
-    if (
-        message.guild
-        and message.guild.id == GUILD_ID
-        and message.channel.id == CHANNEL_ID
-    ):
-        urls = re.findall(
-            r"https?://[^\s]+",
-            message.content
-        )
-
-        for url in urls:
-            msg = await message.reply(
-                view=ProcessingView()
-            )
-
-            try:
-                encoded = urllib.parse.quote(
-                    url,
-                    safe=""
-                )
-
-                timeout = aiohttp.ClientTimeout(
-                    total=120
-                )
-
-                async with aiohttp.ClientSession(
-                    timeout=timeout
-                ) as session:
-
-                    async with session.get(
-                        API_URL + encoded
-                    ) as res:
-
-                        data = await res.json(
-                            content_type=None
-                        )
-
-                        status = data.get("status")
-
-                        if status == "success":
-                            result = data.get("result")
-
-                            await msg.edit(
-                                view=SuccessView(result)
-                            )
-
-                        elif status == "failed":
-                            await msg.edit(
-                                view=FailedView(
-                                    data.get(
-                                        "message",
-                                        "Failed to bypass"
-                                    )
-                                )
-                            )
-
-                        elif status == "error":
-                            await msg.edit(
-                                view=FailedView(
-                                    data.get(
-                                        "message",
-                                        "Unknown error"
-                                    )
-                                )
-                            )
-
-                        else:
-                            await msg.edit(
-                                view=FailedView(
-                                    "Invalid API response."
-                                )
-                            )
-
-            except asyncio.TimeoutError:
-                await msg.edit(
-                    view=FailedView(
-                        "API request timed out."
-                    )
-                )
-
-            except Exception as e:
-                print("Error:", e)
-
-                await msg.edit(
-                    view=FailedView(
-                        str(e)
-                    )
-                )
 
 
 bot.run(TOKEN)
