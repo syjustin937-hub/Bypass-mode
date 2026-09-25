@@ -44,20 +44,6 @@ class CopyButton(discord.ui.Button):
         )
 
 
-class SourceCodeButton(discord.ui.Button):
-    def __init__(self):
-        super().__init__(
-            label="Get Bot Source Code",
-            style=discord.ButtonStyle.secondary
-        )
-
-    async def callback(self, interaction: discord.Interaction):
-        await interaction.response.send_message(
-            "https://github.com/public-account-7/auto-bypass-discord-bot",
-            ephemeral=True
-        )
-
-
 class ProcessingView(discord.ui.LayoutView):
     def __init__(self):
         super().__init__(timeout=None)
@@ -90,8 +76,7 @@ class SuccessView(discord.ui.LayoutView):
                 ),
                 discord.ui.Separator(),
                 discord.ui.ActionRow(
-                    CopyButton(result),
-                    SourceCodeButton()
+                    CopyButton(result)
                 )
             )
         )
