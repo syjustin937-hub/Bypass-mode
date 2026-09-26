@@ -4,6 +4,7 @@ import asyncio
 import urllib.parse
 import json
 import os
+from datetime import datetime
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -33,6 +34,7 @@ config = load_config()
 
 intents = discord.Intents.default()
 intents.message_content = True
+intents.members = True
 
 bot = discord.Client(intents=intents)
 tree = discord.app_commands.CommandTree(bot)
@@ -53,6 +55,113 @@ class CopyButton(discord.ui.Button):
         )
 
 
+class VerifyButton(discord.ui.Button):
+    def __init__(self):
+        super().__init__(
+            label="Verify",
+            style=discord.ButtonStyle.success,
+            emoji=discord.PartialEmoji(name="1000044834", id=1553216869094400020),
+            custom_id="verify_button"
+        )
+
+    async def callback(self, interaction: discord.Interaction):
+        role_id = config.get("verify_role_id")
+
+        if not role_id:
+            await interaction.response.send_message(
+                view=VerifyEphemeralView("error", "Verification role not configured."),
+                ephemeral=True
+            )
+            return
+
+        role = interaction.guild.get_role(role_id)
+
+        if not role:
+            await interaction.response.send_message(
+                view=VerifyEphemeralView("error", "Verification role not found."),
+                ephemeral=True
+            )
+            return
+
+        if role in interaction.user.roles:
+            await interaction.response.send_message(
+                view=VerifyEphemeralView("already", "You are already verified."),
+                ephemeral=True
+            )
+            return
+
+        await interaction.user.add_roles(role)
+
+        await interaction.response.send_message(
+            view=VerifyEphemeralView("success", "You now have access to the server. Welcome!"),
+            ephemeral=True
+        )
+
+        log_channel_id = config.get("verify_log_id")
+        if log_channel_id:
+            log_channel = interaction.guild.get_channel(log_channel_id)
+            if log_channel:
+                embed = discord.Embed(
+                    title="Member Verified",
+                    color=discord.Color.green(),
+                    timestamp=datetime.utcnow()
+                )
+                embed.set_author(
+                    name=str(interaction.user),
+                    icon_url=interaction.user.display_avatar.url
+                )
+                embed.add_field(name="User", value=interaction.user.mention, inline=True)
+                embed.add_field(name="ID", value=interaction.user.id, inline=True)
+                embed.add_field(name="Role Given", value=role.mention, inline=True)
+                await log_channel.send(embed=embed)
+
+
+class VerifyView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
+        self.add_item(VerifyButton())
+
+
+class VerifyEphemeralView(discord.ui.LayoutView):
+    def __init__(self, state: str, message: str):
+        super().__init__(timeout=None)
+
+        if state == "success":
+            self.add_item(
+                discord.ui.Container(
+                    discord.ui.TextDisplay("# ✅ You have been verified!"),
+                    discord.ui.Separator(),
+                    discord.ui.TextDisplay(message),
+                    accent_color=discord.Color.green()
+                )
+            )
+        else:
+            self.add_item(
+                discord.ui.Container(
+                    discord.ui.TextDisplay(f"# {message}"),
+                    accent_color=discord.Color.red()
+                )
+            )
+
+
+class VerifyLayoutView(discord.ui.LayoutView):
+    def __init__(self):
+        super().__init__(timeout=None)
+
+        self.add_item(
+            discord.ui.Container(
+                discord.ui.TextDisplay("# Verify to access this server"),
+                discord.ui.Separator(),
+                discord.ui.TextDisplay(
+                    "Click the button below to verify and gain access to the server."
+                ),
+                discord.ui.ActionRow(
+                    VerifyButton()
+                )
+            )
+        )
+
+
 class ProcessingView(discord.ui.LayoutView):
     def __init__(self):
         super().__init__(timeout=None)
@@ -61,7 +170,8 @@ class ProcessingView(discord.ui.LayoutView):
             discord.ui.Container(
                 discord.ui.TextDisplay("# Processing..."),
                 discord.ui.Separator(),
-                discord.ui.TextDisplay("Please wait while I bypass the link.")
+                discord.ui.TextDisplay("Please wait while I bypass the link."),
+                accent_color=discord.Color.yellow()
             )
         )
 
@@ -78,7 +188,8 @@ class SuccessView(discord.ui.LayoutView):
                 discord.ui.Separator(),
                 discord.ui.ActionRow(
                     CopyButton(result)
-                )
+                ),
+                accent_color=discord.Color.green()
             )
         )
 
@@ -91,7 +202,8 @@ class FailedView(discord.ui.LayoutView):
             discord.ui.Container(
                 discord.ui.TextDisplay("# Failed!"),
                 discord.ui.Separator(),
-                discord.ui.TextDisplay(message)
+                discord.ui.TextDisplay(message),
+                accent_color=discord.Color.red()
             )
         )
 
@@ -104,7 +216,8 @@ class PingView(discord.ui.LayoutView):
             discord.ui.Container(
                 discord.ui.TextDisplay("# Pong!"),
                 discord.ui.Separator(),
-                discord.ui.TextDisplay(f"Latency: **{latency}ms**")
+                discord.ui.TextDisplay(f"Latency: **{latency}ms**"),
+                accent_color=discord.Color.blurple()
             )
         )
 
@@ -120,7 +233,8 @@ class SetupView(discord.ui.LayoutView):
                 discord.ui.TextDisplay(
                     f"Auto bypass channel set to {channel.mention}\n"
                     f"Links sent in that channel will be bypassed automatically."
-                )
+                ),
+                accent_color=discord.Color.green()
             )
         )
 
@@ -203,6 +317,44 @@ async def autobypass(interaction: discord.Interaction, channel: discord.TextChan
     )
 
 
+verify_group = discord.app_commands.Group(
+    name="verify",
+    description="Verification commands",
+    guild_ids=[GUILD_ID],
+    default_permissions=discord.Permissions(administrator=True)
+)
+
+
+@verify_group.command(
+    name="setup",
+    description="Setup verification"
+)
+@discord.app_commands.describe(
+    role="Role to assign when a user verifies",
+    channel="Channel where the verify message will be sent",
+    log="Channel where verifications will be logged"
+)
+async def verify_setup(
+    interaction: discord.Interaction,
+    role: discord.Role,
+    channel: discord.TextChannel,
+    log: discord.TextChannel
+):
+    config["verify_role_id"] = role.id
+    config["verify_log_id"] = log.id
+    save_config(config)
+
+    await channel.send(view=VerifyLayoutView())
+
+    await interaction.response.send_message(
+        f"Verification setup complete.\nVerify channel: {channel.mention}\nRole: {role.mention}\nLog: {log.mention}",
+        ephemeral=True
+    )
+
+
+tree.add_command(verify_group)
+
+
 @bot.event
 async def on_message(message):
     if message.author.bot:
@@ -218,10 +370,10 @@ async def on_message(message):
         and message.guild.id == GUILD_ID
         and message.channel.id == channel_id
     ):
-        urls = []
-        for word in message.content.split():
-            if word.startswith("http://") or word.startswith("https://"):
-                urls.append(word)
+        urls = [
+            word for word in message.content.split()
+            if word.startswith("http://") or word.startswith("https://")
+        ]
 
         for url in urls:
             msg = await message.reply(view=ProcessingView())
@@ -259,13 +411,14 @@ async def on_message(message):
 
 @bot.event
 async def on_ready():
+    bot.add_view(VerifyView())
     await tree.sync(guild=discord.Object(id=GUILD_ID))
     print(f"Logged in as {bot.user}")
     channel_id = config.get("channel_id")
     if channel_id:
         print(f"Auto bypass channel: {channel_id}")
     else:
-        print("No auto bypass channel set. Use /autobypass to configure.")
+        print("No auto bypass channel set.")
 
 
 bot.run(TOKEN)
