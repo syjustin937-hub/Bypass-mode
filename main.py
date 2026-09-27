@@ -4,7 +4,7 @@ import asyncio
 import urllib.parse
 import json
 import os
-from datetime import datetime
+from datetime import datetime, timezone
 from io import BytesIO
 from dotenv import load_dotenv
 import imagehash
@@ -80,6 +80,14 @@ async def check_scam_image(attachment: discord.Attachment) -> bool:
     return False
 
 
+async def delete_after(msg: discord.Message, seconds: int):
+    await asyncio.sleep(seconds)
+    try:
+        await msg.delete()
+    except Exception:
+        pass
+
+
 class CopyButton(discord.ui.Button):
     def __init__(self, result):
         super().__init__(
@@ -141,9 +149,26 @@ class VerifyButton(discord.ui.Button):
         if log_channel_id:
             log_channel = interaction.guild.get_channel(log_channel_id)
             if log_channel:
-                await log_channel.send(
-                    view=VerifyLogView(interaction.user, role)
+                now = datetime.now(timezone.utc)
+                created = interaction.user.created_at
+                account_age = (now - created).days
+
+                embed = discord.Embed(
+                    title="Member Verified",
+                    color=discord.Color.green(),
+                    timestamp=now
                 )
+                embed.set_author(
+                    name=str(interaction.user),
+                    icon_url=interaction.user.display_avatar.url
+                )
+                embed.set_thumbnail(url=interaction.user.display_avatar.url)
+                embed.add_field(name="User", value=interaction.user.mention, inline=True)
+                embed.add_field(name="ID", value=f"`{interaction.user.id}`", inline=True)
+                embed.add_field(name="Role Given", value=role.mention, inline=True)
+                embed.add_field(name="Account Age", value=f"`{account_age}` days", inline=True)
+                embed.add_field(name="Created", value=f"<t:{int(created.timestamp())}:R>", inline=True)
+                await log_channel.send(embed=embed)
 
 
 class VerifyView(discord.ui.View):
@@ -172,25 +197,6 @@ class VerifyEphemeralView(discord.ui.LayoutView):
                     accent_color=discord.Color.red()
                 )
             )
-
-
-class VerifyLogView(discord.ui.LayoutView):
-    def __init__(self, user: discord.Member, role: discord.Role):
-        super().__init__(timeout=None)
-
-        self.add_item(
-            discord.ui.Container(
-                discord.ui.TextDisplay("# Member Verified"),
-                discord.ui.Separator(),
-                discord.ui.TextDisplay(
-                    f"**User:** {user.mention}\n"
-                    f"**ID:** {user.id}\n"
-                    f"**Role Given:** {role.mention}\n"
-                    f"**Time:** <t:{int(datetime.utcnow().timestamp())}:F>"
-                ),
-                accent_color=discord.Color.green()
-            )
-        )
 
 
 class VerifyLayoutView(discord.ui.LayoutView):
@@ -434,9 +440,10 @@ async def on_message(message):
                     await message.author.kick(reason="MrBeast scam auto detected")
                 except Exception as e:
                     print(f"Kick failed: {e}")
-                await message.channel.send(
+                sent = await message.channel.send(
                     view=UserKickedView(message.author)
                 )
+                asyncio.create_task(delete_after(sent, 60))
                 return
 
     channel_id = config.get("channel_id")
