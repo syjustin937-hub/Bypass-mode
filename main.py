@@ -5,7 +5,10 @@ import urllib.parse
 import json
 import os
 from datetime import datetime
+from io import BytesIO
 from dotenv import load_dotenv
+import imagehash
+from PIL import Image
 
 load_dotenv()
 
@@ -13,6 +16,8 @@ TOKEN = os.getenv("TOKEN")
 GUILD_ID = int(os.getenv("GUILD_ID"))
 CONFIG_FILE = "config.json"
 API_URL = "https://doitenroi.win/api/bypass?url="
+REFERENCE_DIR = "reference_images"
+HASH_THRESHOLD = 10
 
 if not TOKEN:
     raise ValueError("Missing TOKEN in .env")
@@ -30,7 +35,25 @@ def save_config(data):
         json.dump(data, f, indent=2)
 
 
+def load_reference_hashes():
+    hashes = []
+    if not os.path.exists(REFERENCE_DIR):
+        os.makedirs(REFERENCE_DIR)
+        return hashes
+    for filename in os.listdir(REFERENCE_DIR):
+        if filename.lower().endswith((".png", ".jpg", ".jpeg", ".webp")):
+            path = os.path.join(REFERENCE_DIR, filename)
+            try:
+                img = Image.open(path)
+                hashes.append(imagehash.phash(img))
+            except Exception as e:
+                print(f"Failed to load reference image {filename}: {e}")
+    print(f"Loaded {len(hashes)} reference image(s)")
+    return hashes
+
+
 config = load_config()
+reference_hashes = load_reference_hashes()
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -38,6 +61,23 @@ intents.members = True
 
 bot = discord.Client(intents=intents)
 tree = discord.app_commands.CommandTree(bot)
+
+
+async def check_scam_image(attachment: discord.Attachment) -> bool:
+    if not attachment.content_type or not attachment.content_type.startswith("image/"):
+        return False
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(attachment.url) as res:
+                data = await res.read()
+        img = Image.open(BytesIO(data))
+        img_hash = imagehash.phash(img)
+        for ref_hash in reference_hashes:
+            if abs(img_hash - ref_hash) <= HASH_THRESHOLD:
+                return True
+    except Exception as e:
+        print(f"Image check error: {e}")
+    return False
 
 
 class CopyButton(discord.ui.Button):
@@ -101,19 +141,9 @@ class VerifyButton(discord.ui.Button):
         if log_channel_id:
             log_channel = interaction.guild.get_channel(log_channel_id)
             if log_channel:
-                embed = discord.Embed(
-                    title="Member Verified",
-                    color=discord.Color.green(),
-                    timestamp=datetime.utcnow()
+                await log_channel.send(
+                    view=VerifyLogView(interaction.user, role)
                 )
-                embed.set_author(
-                    name=str(interaction.user),
-                    icon_url=interaction.user.display_avatar.url
-                )
-                embed.add_field(name="User", value=interaction.user.mention, inline=True)
-                embed.add_field(name="ID", value=interaction.user.id, inline=True)
-                embed.add_field(name="Role Given", value=role.mention, inline=True)
-                await log_channel.send(embed=embed)
 
 
 class VerifyView(discord.ui.View):
@@ -144,6 +174,25 @@ class VerifyEphemeralView(discord.ui.LayoutView):
             )
 
 
+class VerifyLogView(discord.ui.LayoutView):
+    def __init__(self, user: discord.Member, role: discord.Role):
+        super().__init__(timeout=None)
+
+        self.add_item(
+            discord.ui.Container(
+                discord.ui.TextDisplay("# Member Verified"),
+                discord.ui.Separator(),
+                discord.ui.TextDisplay(
+                    f"**User:** {user.mention}\n"
+                    f"**ID:** {user.id}\n"
+                    f"**Role Given:** {role.mention}\n"
+                    f"**Time:** <t:{int(datetime.utcnow().timestamp())}:F>"
+                ),
+                accent_color=discord.Color.green()
+            )
+        )
+
+
 class VerifyLayoutView(discord.ui.LayoutView):
     def __init__(self):
         super().__init__(timeout=None)
@@ -158,6 +207,23 @@ class VerifyLayoutView(discord.ui.LayoutView):
                 discord.ui.ActionRow(
                     VerifyButton()
                 )
+            )
+        )
+
+
+class UserKickedView(discord.ui.LayoutView):
+    def __init__(self, user: discord.Member):
+        super().__init__(timeout=None)
+
+        self.add_item(
+            discord.ui.Container(
+                discord.ui.TextDisplay("# User Kicked"),
+                discord.ui.Separator(),
+                discord.ui.TextDisplay(
+                    f"{user.mention} has been kicked\n"
+                    f"Reason: MrBeast scam auto detected"
+                ),
+                accent_color=discord.Color.red()
             )
         )
 
@@ -360,6 +426,19 @@ async def on_message(message):
     if message.author.bot:
         return
 
+    if message.attachments:
+        for attachment in message.attachments:
+            if await check_scam_image(attachment):
+                await message.delete()
+                try:
+                    await message.author.kick(reason="MrBeast scam auto detected")
+                except Exception as e:
+                    print(f"Kick failed: {e}")
+                await message.channel.send(
+                    view=UserKickedView(message.author)
+                )
+                return
+
     channel_id = config.get("channel_id")
 
     if not channel_id:
@@ -414,11 +493,7 @@ async def on_ready():
     bot.add_view(VerifyView())
     await tree.sync(guild=discord.Object(id=GUILD_ID))
     print(f"Logged in as {bot.user}")
-    channel_id = config.get("channel_id")
-    if channel_id:
-        print(f"Auto bypass channel: {channel_id}")
-    else:
-        print("No auto bypass channel set.")
+    print(f"Reference images loaded: {len(reference_hashes)}")
 
 
 bot.run(TOKEN)
