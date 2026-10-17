@@ -20,9 +20,12 @@ CONFIG_FILE = "config.json"
 API_URL = "https://doitenroi.win/api/bypass?url="
 REFERENCE_DIR = "reference_images"
 HASH_THRESHOLD = 10
+PREFIX = "."
 
 if not TOKEN:
     raise ValueError("Missing TOKEN in .env")
+
+last_deleted = {}
 
 
 def load_config():
@@ -114,10 +117,8 @@ async def end_giveaway(msg_id: str, gw: dict):
         message = await channel.fetch_message(int(msg_id))
     except Exception:
         return
-
     entries = gw["entries"]
     winner_count = gw["winner_count"]
-
     if not entries:
         winners = []
         winner_text = "No entries — no winner."
@@ -125,11 +126,9 @@ async def end_giveaway(msg_id: str, gw: dict):
         picked = random.sample(entries, min(winner_count, len(entries)))
         winners = [str(u) for u in picked]
         winner_text = " ".join(f"<@{uid}>" for uid in picked)
-
     gw["ended"] = True
     gw["winners"] = winners
     save_config(config)
-
     await message.edit(view=GiveawayEndedView(gw["prize"], winner_count, len(entries)))
     await channel.send(
         f"🎉 Giveaway ended! **{gw['prize']}**\nWinner(s): {winner_text}",
@@ -148,6 +147,27 @@ async def giveaway_loop():
             if now >= gw["end_timestamp"]:
                 await end_giveaway(msg_id, gw)
         await asyncio.sleep(15)
+
+
+async def do_bypass(url: str, reply_msg):
+    try:
+        encoded = urllib.parse.quote(url, safe="")
+        timeout_cfg = aiohttp.ClientTimeout(total=120)
+        async with aiohttp.ClientSession(timeout=timeout_cfg) as session:
+            async with session.get(API_URL + encoded) as res:
+                data = await res.json(content_type=None)
+                status = data.get("status")
+                if status == "success":
+                    await reply_msg.edit(view=SuccessView(data.get("result")))
+                elif status in ("failed", "error"):
+                    await reply_msg.edit(view=FailedView(data.get("message", "Failed to bypass")))
+                else:
+                    await reply_msg.edit(view=FailedView("Invalid API response."))
+    except asyncio.TimeoutError:
+        await reply_msg.edit(view=FailedView("API request timed out."))
+    except Exception as e:
+        print("Error:", e)
+        await reply_msg.edit(view=FailedView(str(e)))
 
 
 class CopyButton(discord.ui.Button):
@@ -171,33 +191,17 @@ class VerifyButton(discord.ui.Button):
     async def callback(self, interaction: discord.Interaction):
         role_id = config.get("verify_role_id")
         if not role_id:
-            await interaction.response.send_message(
-                view=VerifyEphemeralView("error", "Verification role not configured."),
-                ephemeral=True
-            )
+            await interaction.response.send_message(view=VerifyEphemeralView("error", "Verification role not configured."), ephemeral=True)
             return
-
         role = interaction.guild.get_role(role_id)
         if not role:
-            await interaction.response.send_message(
-                view=VerifyEphemeralView("error", "Verification role not found."),
-                ephemeral=True
-            )
+            await interaction.response.send_message(view=VerifyEphemeralView("error", "Verification role not found."), ephemeral=True)
             return
-
         if role in interaction.user.roles:
-            await interaction.response.send_message(
-                view=VerifyEphemeralView("already", "You are already verified."),
-                ephemeral=True
-            )
+            await interaction.response.send_message(view=VerifyEphemeralView("already", "You are already verified."), ephemeral=True)
             return
-
         await interaction.user.add_roles(role)
-        await interaction.response.send_message(
-            view=VerifyEphemeralView("success", "You now have access to the server. Welcome!"),
-            ephemeral=True
-        )
-
+        await interaction.response.send_message(view=VerifyEphemeralView("success", "You now have access to the server. Welcome!"), ephemeral=True)
         log_channel_id = config.get("verify_log_id")
         if log_channel_id:
             log_channel = interaction.guild.get_channel(log_channel_id)
@@ -205,11 +209,7 @@ class VerifyButton(discord.ui.Button):
                 now = datetime.now(timezone.utc)
                 created = interaction.user.created_at
                 account_age = (now - created).days
-                embed = discord.Embed(
-                    title="Member Verified",
-                    color=discord.Color.green(),
-                    timestamp=now
-                )
+                embed = discord.Embed(title="Member Verified", color=discord.Color.green(), timestamp=now)
                 embed.set_author(name=str(interaction.user), icon_url=interaction.user.display_avatar.url)
                 embed.set_thumbnail(url=interaction.user.display_avatar.url)
                 embed.add_field(name="User", value=interaction.user.mention, inline=True)
@@ -222,43 +222,30 @@ class VerifyButton(discord.ui.Button):
 
 class GiveawayEnterButton(discord.ui.Button):
     def __init__(self, count: int = 0):
-        super().__init__(
-            label=f"🎉 Enter ({count})",
-            style=discord.ButtonStyle.primary,
-            custom_id="giveaway_enter"
-        )
+        super().__init__(label=f"🎉 Enter ({count})", style=discord.ButtonStyle.primary, custom_id="giveaway_enter")
 
     async def callback(self, interaction: discord.Interaction):
         msg_id = str(interaction.message.id)
         giveaways = config.get("giveaways", {})
-
         if msg_id not in giveaways:
             await interaction.response.send_message("This giveaway no longer exists.", ephemeral=True)
             return
-
         gw = giveaways[msg_id]
-
         if gw.get("ended"):
             await interaction.response.send_message("This giveaway has already ended.", ephemeral=True)
             return
-
         uid = str(interaction.user.id)
-
         if uid in gw["entries"]:
             gw["entries"].remove(uid)
             save_config(config)
             count = len(gw["entries"])
-            await interaction.message.edit(
-                view=GiveawayActiveView(gw["prize"], gw["winner_count"], gw["end_timestamp"], count)
-            )
+            await interaction.message.edit(view=GiveawayActiveView(gw["prize"], gw["winner_count"], gw["end_timestamp"], count))
             await interaction.response.send_message("You left the giveaway.", ephemeral=True)
         else:
             gw["entries"].append(uid)
             save_config(config)
             count = len(gw["entries"])
-            await interaction.message.edit(
-                view=GiveawayActiveView(gw["prize"], gw["winner_count"], gw["end_timestamp"], count)
-            )
+            await interaction.message.edit(view=GiveawayActiveView(gw["prize"], gw["winner_count"], gw["end_timestamp"], count))
             await interaction.response.send_message("You entered the giveaway! 🎉", ephemeral=True)
 
 
@@ -272,6 +259,141 @@ class GiveawayPersistentView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
         self.add_item(GiveawayEnterButton())
+
+
+class HelpView(discord.ui.LayoutView):
+    def __init__(self):
+        super().__init__(timeout=None)
+        self.add_item(
+            discord.ui.Container(
+                discord.ui.TextDisplay("# Help — Commands"),
+                discord.ui.Separator(),
+                discord.ui.TextDisplay(
+                    f"You can use either prefix commands (`.command`) or slash commands (`/command`)"
+                ),
+                discord.ui.Separator(),
+                discord.ui.TextDisplay(
+                    "**Moderation Commands**\n"
+                    "`.kick @user [reason]`\n"
+                    "`.ban @user [reason]`\n"
+                    "`.unban <userID>`\n"
+                    "`.timeout @user <minutes> [reason]`\n"
+                    "`.untimeout @user`\n"
+                    "`.purge <amount>`"
+                ),
+                discord.ui.Separator(),
+                discord.ui.TextDisplay(
+                    "**Warning Commands**\n"
+                    "`.warn @user [reason]`\n"
+                    "`.warns [@user]`\n"
+                    "`.clearwarns @user`"
+                ),
+                discord.ui.Separator(),
+                discord.ui.TextDisplay(
+                    "**Channel Commands**\n"
+                    "`.lock [#channel]`\n"
+                    "`.unlock [#channel]`\n"
+                    "`.slowmode <seconds> [#channel]`"
+                ),
+                discord.ui.Separator(),
+                discord.ui.TextDisplay(
+                    "**Giveaway Commands**\n"
+                    "`.gstart <duration> <winners> <prize>`\n"
+                    "`.gend <message_id>`\n"
+                    "`.greroll <message_id>`"
+                ),
+                discord.ui.Separator(),
+                discord.ui.TextDisplay(
+                    "**Utility Commands**\n"
+                    "`.ping`\n"
+                    "`.say #channel <message>`\n"
+                    "`.afk [reason]`\n"
+                    "`.snipe`\n"
+                    "`.avatar [@user]`\n"
+                    "`.bypass <link>`\n"
+                    "`.help`"
+                ),
+                discord.ui.Separator(),
+                discord.ui.TextDisplay(f"Prefix: `.` | All commands also available as `/command`"),
+                accent_color=discord.Color.blurple()
+            )
+        )
+
+
+class AfkSetView(discord.ui.LayoutView):
+    def __init__(self, member, reason: str):
+        super().__init__(timeout=None)
+        self.add_item(
+            discord.ui.Container(
+                discord.ui.TextDisplay("# 😴 You are now AFK"),
+                discord.ui.Separator(),
+                discord.ui.TextDisplay(
+                    f"**User:** {member.mention}\n"
+                    f"**Reason:** {reason}"
+                ),
+                accent_color=discord.Color.yellow()
+            )
+        )
+
+
+class AfkReturnView(discord.ui.LayoutView):
+    def __init__(self, member):
+        super().__init__(timeout=None)
+        self.add_item(
+            discord.ui.Container(
+                discord.ui.TextDisplay(f"# 👋 Welcome back, {member.display_name}!"),
+                discord.ui.Separator(),
+                discord.ui.TextDisplay("Your AFK status has been removed."),
+                accent_color=discord.Color.green()
+            )
+        )
+
+
+class AfkMentionView(discord.ui.LayoutView):
+    def __init__(self, member, reason: str, timestamp: int):
+        super().__init__(timeout=None)
+        self.add_item(
+            discord.ui.Container(
+                discord.ui.TextDisplay(f"# 😴 {member.display_name} is AFK"),
+                discord.ui.Separator(),
+                discord.ui.TextDisplay(
+                    f"**Reason:** {reason}\n"
+                    f"**Since:** <t:{timestamp}:R>"
+                ),
+                accent_color=discord.Color.yellow()
+            )
+        )
+
+
+class SnipeView(discord.ui.LayoutView):
+    def __init__(self, data: dict):
+        super().__init__(timeout=None)
+        content = data["content"] if data.get("content") else "(no text content)"
+        self.add_item(
+            discord.ui.Container(
+                discord.ui.TextDisplay("# 🔍 Sniped Message"),
+                discord.ui.Separator(),
+                discord.ui.TextDisplay(
+                    f"**Author:** {data['author_name']}\n"
+                    f"**Sent:** <t:{data['timestamp']}:R>\n\n"
+                    f"{content}"
+                ),
+                accent_color=discord.Color.blurple()
+            )
+        )
+
+
+class SnipeEmptyView(discord.ui.LayoutView):
+    def __init__(self):
+        super().__init__(timeout=None)
+        self.add_item(
+            discord.ui.Container(
+                discord.ui.TextDisplay("# 🔍 Snipe"),
+                discord.ui.Separator(),
+                discord.ui.TextDisplay("No recently deleted messages in this channel."),
+                accent_color=discord.Color.red()
+            )
+        )
 
 
 class VerifyEphemeralView(discord.ui.LayoutView):
@@ -522,9 +644,7 @@ class WarnsListView(discord.ui.LayoutView):
         else:
             lines = []
             for i, w in enumerate(warns, 1):
-                lines.append(
-                    f"**{i}.** {w['reason']} — <t:{w['timestamp']}:R> by <@{w['moderator_id']}>"
-                )
+                lines.append(f"**{i}.** {w['reason']} — <t:{w['timestamp']}:R> by <@{w['moderator_id']}>")
             body = "\n".join(lines)
         self.add_item(
             discord.ui.Container(
@@ -646,6 +766,11 @@ class GiveawayRerollView(discord.ui.LayoutView):
         )
 
 
+@tree.command(name="help", description="Show all commands", guild=discord.Object(id=GUILD_ID))
+async def help_cmd(interaction: discord.Interaction):
+    await interaction.response.send_message(view=HelpView())
+
+
 @tree.command(name="ping", description="Check bot latency", guild=discord.Object(id=GUILD_ID))
 @discord.app_commands.default_permissions(administrator=True)
 async def ping(interaction: discord.Interaction):
@@ -657,24 +782,8 @@ async def ping(interaction: discord.Interaction):
 @discord.app_commands.describe(link="The link to bypass")
 async def bypass(interaction: discord.Interaction, link: str):
     await interaction.response.send_message(view=ProcessingView())
-    try:
-        encoded = urllib.parse.quote(link, safe="")
-        timeout = aiohttp.ClientTimeout(total=120)
-        async with aiohttp.ClientSession(timeout=timeout) as session:
-            async with session.get(API_URL + encoded) as res:
-                data = await res.json(content_type=None)
-                status = data.get("status")
-                if status == "success":
-                    await interaction.edit_original_response(view=SuccessView(data.get("result")))
-                elif status in ("failed", "error"):
-                    await interaction.edit_original_response(view=FailedView(data.get("message", "Failed to bypass")))
-                else:
-                    await interaction.edit_original_response(view=FailedView("Invalid API response."))
-    except asyncio.TimeoutError:
-        await interaction.edit_original_response(view=FailedView("API request timed out."))
-    except Exception as e:
-        print("Error:", e)
-        await interaction.edit_original_response(view=FailedView(str(e)))
+    msg = await interaction.original_response()
+    await do_bypass(link, msg)
 
 
 @tree.command(name="autobypass", description="Setup auto bypass channel", guild=discord.Object(id=GUILD_ID))
@@ -760,7 +869,7 @@ async def purge(interaction: discord.Interaction, amount: int):
 @tree.command(name="timeout", description="Timeout a member", guild=discord.Object(id=GUILD_ID))
 @discord.app_commands.describe(member="Member to timeout", minutes="Duration in minutes", reason="Reason for the timeout")
 @discord.app_commands.default_permissions(moderate_members=True)
-async def timeout(interaction: discord.Interaction, member: discord.Member, minutes: int, reason: str = "No reason provided"):
+async def timeout_cmd(interaction: discord.Interaction, member: discord.Member, minutes: int, reason: str = "No reason provided"):
     minutes = max(1, min(40320, minutes))
     try:
         until = datetime.now(timezone.utc) + timedelta(minutes=minutes)
@@ -869,6 +978,37 @@ async def unlock(interaction: discord.Interaction, channel: discord.TextChannel 
         await interaction.response.send_message(view=FailedView(str(e)), ephemeral=True)
 
 
+@tree.command(name="afk", description="Set your AFK status", guild=discord.Object(id=GUILD_ID))
+@discord.app_commands.describe(reason="Reason for AFK")
+async def afk_cmd(interaction: discord.Interaction, reason: str = "AFK"):
+    if "afk" not in config:
+        config["afk"] = {}
+    config["afk"][str(interaction.user.id)] = {
+        "reason": reason,
+        "timestamp": int(datetime.now(timezone.utc).timestamp())
+    }
+    save_config(config)
+    await interaction.response.send_message(view=AfkSetView(interaction.user, reason))
+
+
+@tree.command(name="snipe", description="View the last deleted message in this channel", guild=discord.Object(id=GUILD_ID))
+async def snipe_cmd(interaction: discord.Interaction):
+    data = last_deleted.get(interaction.channel.id)
+    if not data:
+        await interaction.response.send_message(view=SnipeEmptyView())
+    else:
+        await interaction.response.send_message(view=SnipeView(data))
+
+
+@tree.command(name="avatar", description="View a user's avatar", guild=discord.Object(id=GUILD_ID))
+@discord.app_commands.describe(member="Member to view avatar of")
+async def avatar_cmd(interaction: discord.Interaction, member: discord.Member = None):
+    target = member or interaction.user
+    embed = discord.Embed(title=f"{target.display_name}'s Avatar", color=discord.Color.blurple())
+    embed.set_image(url=str(target.display_avatar.url))
+    await interaction.response.send_message(embed=embed)
+
+
 verify_group = discord.app_commands.Group(
     name="verify",
     description="Verification commands",
@@ -883,12 +1023,7 @@ verify_group = discord.app_commands.Group(
     channel="Channel where the verify message will be sent",
     log="Channel where verifications will be logged"
 )
-async def verify_setup(
-    interaction: discord.Interaction,
-    role: discord.Role,
-    channel: discord.TextChannel,
-    log: discord.TextChannel
-):
+async def verify_setup(interaction: discord.Interaction, role: discord.Role, channel: discord.TextChannel, log: discord.TextChannel):
     config["verify_role_id"] = role.id
     config["verify_log_id"] = log.id
     save_config(config)
@@ -910,33 +1045,16 @@ giveaway_group = discord.app_commands.Group(
 
 
 @giveaway_group.command(name="start", description="Start a giveaway")
-@discord.app_commands.describe(
-    channel="Channel for the giveaway",
-    duration="Duration e.g. 1h, 30m, 2d, 1h30m",
-    prize="What you're giving away",
-    winners="Number of winners"
-)
-async def giveaway_start(
-    interaction: discord.Interaction,
-    channel: discord.TextChannel,
-    duration: str,
-    prize: str,
-    winners: int = 1
-):
+@discord.app_commands.describe(channel="Channel for the giveaway", duration="Duration e.g. 1h, 30m, 2d, 1h30m", prize="What you're giving away", winners="Number of winners")
+async def giveaway_start(interaction: discord.Interaction, channel: discord.TextChannel, duration: str, prize: str, winners: int = 1):
     seconds = parse_duration(duration)
     if seconds <= 0:
-        await interaction.response.send_message(
-            view=FailedView("Invalid duration. Use format like `1h`, `30m`, `2d`, `1h30m`."),
-            ephemeral=True
-        )
+        await interaction.response.send_message(view=FailedView("Invalid duration. Use format like `1h`, `30m`, `2d`, `1h30m`."), ephemeral=True)
         return
-
     end_ts = int((datetime.now(timezone.utc) + timedelta(seconds=seconds)).timestamp())
     msg = await channel.send(view=GiveawayActiveView(prize, winners, end_ts, 0))
-
     if "giveaways" not in config:
         config["giveaways"] = {}
-
     config["giveaways"][str(msg.id)] = {
         "channel_id": channel.id,
         "prize": prize,
@@ -947,11 +1065,7 @@ async def giveaway_start(
         "winners": []
     }
     save_config(config)
-
-    await interaction.response.send_message(
-        view=GiveawayStartedView(channel, prize, end_ts),
-        ephemeral=True
-    )
+    await interaction.response.send_message(view=GiveawayStartedView(channel, prize, end_ts), ephemeral=True)
 
 
 @giveaway_group.command(name="end", description="Force end a giveaway early")
@@ -985,24 +1099,17 @@ async def giveaway_reroll(interaction: discord.Interaction, message_id: str):
     if not entries:
         await interaction.response.send_message(view=FailedView("No entries to reroll from."), ephemeral=True)
         return
-
     picked = random.sample(entries, min(gw["winner_count"], len(entries)))
     gw["winners"] = picked
     save_config(config)
-
     channel = bot.get_channel(gw["channel_id"])
     winner_text = " ".join(f"<@{uid}>" for uid in picked)
-
     if channel:
         try:
             original = await channel.fetch_message(int(message_id))
-            await channel.send(
-                f"🎉 Giveaway rerolled! **{gw['prize']}**\nNew winner(s): {winner_text}",
-                reference=original
-            )
+            await channel.send(f"🎉 Giveaway rerolled! **{gw['prize']}**\nNew winner(s): {winner_text}", reference=original)
         except Exception:
             pass
-
     await interaction.response.send_message(view=GiveawayRerollView(picked), ephemeral=True)
 
 
@@ -1010,9 +1117,44 @@ tree.add_command(giveaway_group)
 
 
 @bot.event
+async def on_message_delete(message):
+    if message.author.bot:
+        return
+    if message.content:
+        last_deleted[message.channel.id] = {
+            "content": message.content,
+            "author_name": str(message.author),
+            "author_id": message.author.id,
+            "timestamp": int(message.created_at.timestamp())
+        }
+
+
+@bot.event
 async def on_message(message):
     if message.author.bot:
         return
+
+    if message.guild and message.mentions:
+        afk_data = config.get("afk", {})
+        for mentioned in message.mentions:
+            uid = str(mentioned.id)
+            if uid in afk_data:
+                afk = afk_data[uid]
+                sent = await message.channel.send(
+                    view=AfkMentionView(mentioned, afk["reason"], afk["timestamp"])
+                )
+                asyncio.create_task(delete_after(sent, 10))
+
+    if message.guild:
+        afk_data = config.get("afk", {})
+        uid = str(message.author.id)
+        content_lower = message.content.lower().strip()
+        is_afk_cmd = content_lower == f"{PREFIX}afk" or content_lower.startswith(f"{PREFIX}afk ")
+        if uid in afk_data and not is_afk_cmd:
+            del config["afk"][uid]
+            save_config(config)
+            sent = await message.channel.send(view=AfkReturnView(message.author))
+            asyncio.create_task(delete_after(sent, 5))
 
     if message.attachments:
         for attachment in message.attachments:
@@ -1026,39 +1168,346 @@ async def on_message(message):
                 asyncio.create_task(delete_after(sent, 60))
                 return
 
-    channel_id = config.get("channel_id")
-    if not channel_id:
+    if not message.content.startswith(PREFIX):
+        bypass_channel_id = config.get("channel_id")
+        if (
+            bypass_channel_id
+            and message.guild
+            and message.guild.id == GUILD_ID
+            and message.channel.id == bypass_channel_id
+        ):
+            urls = [w for w in message.content.split() if w.startswith("http://") or w.startswith("https://")]
+            for url in urls:
+                msg = await message.reply(view=ProcessingView())
+                await do_bypass(url, msg)
         return
 
-    if (
-        message.guild
-        and message.guild.id == GUILD_ID
-        and message.channel.id == channel_id
-    ):
-        urls = [
-            word for word in message.content.split()
-            if word.startswith("http://") or word.startswith("https://")
-        ]
-        for url in urls:
-            msg = await message.reply(view=ProcessingView())
+    if not message.guild or message.guild.id != GUILD_ID:
+        return
+
+    args = message.content[len(PREFIX):].split()
+    if not args:
+        return
+    cmd = args[0].lower()
+
+    if cmd == "help":
+        await message.channel.send(view=HelpView())
+
+    elif cmd == "ping":
+        latency = round(bot.latency * 1000)
+        await message.channel.send(view=PingView(latency))
+
+    elif cmd == "bypass":
+        if len(args) < 2:
+            await message.channel.send(view=FailedView("Usage: `.bypass <link>`"))
+            return
+        url = args[1]
+        msg = await message.channel.send(view=ProcessingView())
+        await do_bypass(url, msg)
+
+    elif cmd == "say":
+        if not message.author.guild_permissions.administrator:
+            return
+        if not message.channel_mentions or len(args) < 3:
+            await message.channel.send(view=FailedView("Usage: `.say #channel <message>`"))
+            return
+        target_channel = message.channel_mentions[0]
+        full = message.content[len(PREFIX) + len("say "):].strip()
+        mention_str = target_channel.mention
+        content = full[full.index(mention_str) + len(mention_str):].strip() if mention_str in full else " ".join(args[2:])
+        if not content:
+            await message.channel.send(view=FailedView("Please provide a message to send."))
+            return
+        await target_channel.send(content)
+        await message.channel.send(view=SayView(target_channel, content))
+
+    elif cmd == "kick":
+        if not message.author.guild_permissions.kick_members:
+            return
+        if not message.mentions:
+            await message.channel.send(view=FailedView("Usage: `.kick @user [reason]`"))
+            return
+        member = message.mentions[0]
+        reason = " ".join(args[2:]) if len(args) > 2 else "No reason provided"
+        try:
+            await member.kick(reason=reason)
+            await message.channel.send(view=KickResultView(member, reason))
+        except discord.Forbidden:
+            await message.channel.send(view=FailedView("I don't have permission to kick that member."))
+        except Exception as e:
+            await message.channel.send(view=FailedView(str(e)))
+
+    elif cmd == "ban":
+        if not message.author.guild_permissions.ban_members:
+            return
+        if not message.mentions:
+            await message.channel.send(view=FailedView("Usage: `.ban @user [reason]`"))
+            return
+        member = message.mentions[0]
+        reason = " ".join(args[2:]) if len(args) > 2 else "No reason provided"
+        try:
+            await member.ban(reason=reason, delete_message_days=0)
+            await message.channel.send(view=BanResultView(member, reason))
+        except discord.Forbidden:
+            await message.channel.send(view=FailedView("I don't have permission to ban that member."))
+        except Exception as e:
+            await message.channel.send(view=FailedView(str(e)))
+
+    elif cmd == "unban":
+        if not message.author.guild_permissions.ban_members:
+            return
+        if len(args) < 2:
+            await message.channel.send(view=FailedView("Usage: `.unban <userID>`"))
+            return
+        try:
+            uid = int(args[1])
+            user = await bot.fetch_user(uid)
+            await message.guild.unban(user)
+            await message.channel.send(view=UnbanResultView(uid))
+        except discord.NotFound:
+            await message.channel.send(view=FailedView("User not found or not banned."))
+        except ValueError:
+            await message.channel.send(view=FailedView("Invalid user ID."))
+        except Exception as e:
+            await message.channel.send(view=FailedView(str(e)))
+
+    elif cmd == "purge":
+        if not message.author.guild_permissions.manage_messages:
+            return
+        if len(args) < 2:
+            await message.channel.send(view=FailedView("Usage: `.purge <amount>`"))
+            return
+        try:
+            amount = max(1, min(100, int(args[1])))
+            await message.delete()
+            deleted = await message.channel.purge(limit=amount)
+            msg = await message.channel.send(view=PurgeResultView(len(deleted), message.channel))
+            asyncio.create_task(delete_after(msg, 5))
+        except Exception as e:
+            await message.channel.send(view=FailedView(str(e)))
+
+    elif cmd == "timeout":
+        if not message.author.guild_permissions.moderate_members:
+            return
+        if not message.mentions or len(args) < 3:
+            await message.channel.send(view=FailedView("Usage: `.timeout @user <minutes> [reason]`"))
+            return
+        member = message.mentions[0]
+        try:
+            minutes = max(1, min(40320, int(args[2])))
+            reason = " ".join(args[3:]) if len(args) > 3 else "No reason provided"
+            until = datetime.now(timezone.utc) + timedelta(minutes=minutes)
+            await member.timeout(until, reason=reason)
+            await message.channel.send(view=TimeoutResultView(member, minutes, reason))
+        except discord.Forbidden:
+            await message.channel.send(view=FailedView("I don't have permission to timeout that member."))
+        except Exception as e:
+            await message.channel.send(view=FailedView(str(e)))
+
+    elif cmd == "untimeout":
+        if not message.author.guild_permissions.moderate_members:
+            return
+        if not message.mentions:
+            await message.channel.send(view=FailedView("Usage: `.untimeout @user`"))
+            return
+        member = message.mentions[0]
+        try:
+            await member.timeout(None)
+            await message.channel.send(view=UntimeoutResultView(member))
+        except discord.Forbidden:
+            await message.channel.send(view=FailedView("I don't have permission to remove that timeout."))
+        except Exception as e:
+            await message.channel.send(view=FailedView(str(e)))
+
+    elif cmd == "warn":
+        if not message.author.guild_permissions.moderate_members:
+            return
+        if not message.mentions:
+            await message.channel.send(view=FailedView("Usage: `.warn @user [reason]`"))
+            return
+        member = message.mentions[0]
+        reason = " ".join(args[2:]) if len(args) > 2 else "No reason provided"
+        if "warns" not in config:
+            config["warns"] = {}
+        uid = str(member.id)
+        if uid not in config["warns"]:
+            config["warns"][uid] = []
+        config["warns"][uid].append({
+            "reason": reason,
+            "timestamp": int(datetime.now(timezone.utc).timestamp()),
+            "moderator_id": message.author.id
+        })
+        save_config(config)
+        total = len(config["warns"][uid])
+        await message.channel.send(view=WarnAddedView(member, reason, total))
+
+    elif cmd == "warns":
+        if not message.author.guild_permissions.moderate_members:
+            return
+        member = message.mentions[0] if message.mentions else message.author
+        warns_data = config.get("warns", {}).get(str(member.id), [])
+        await message.channel.send(view=WarnsListView(member, warns_data))
+
+    elif cmd == "clearwarns":
+        if not message.author.guild_permissions.administrator:
+            return
+        if not message.mentions:
+            await message.channel.send(view=FailedView("Usage: `.clearwarns @user`"))
+            return
+        member = message.mentions[0]
+        if "warns" in config and str(member.id) in config["warns"]:
+            config["warns"][str(member.id)] = []
+            save_config(config)
+        await message.channel.send(view=WarnsCleared(member))
+
+    elif cmd == "slowmode":
+        if not message.author.guild_permissions.manage_channels:
+            return
+        if len(args) < 2:
+            await message.channel.send(view=FailedView("Usage: `.slowmode <seconds> [#channel]`"))
+            return
+        target = message.channel_mentions[0] if message.channel_mentions else message.channel
+        try:
+            seconds = max(0, min(21600, int(args[1])))
+            await target.edit(slowmode_delay=seconds)
+            await message.channel.send(view=SlowmodeView(target, seconds))
+        except discord.Forbidden:
+            await message.channel.send(view=FailedView("I don't have permission to edit that channel."))
+        except Exception as e:
+            await message.channel.send(view=FailedView(str(e)))
+
+    elif cmd == "lock":
+        if not message.author.guild_permissions.manage_channels:
+            return
+        target = message.channel_mentions[0] if message.channel_mentions else message.channel
+        overwrite = target.overwrites_for(message.guild.default_role)
+        overwrite.send_messages = False
+        try:
+            await target.set_permissions(message.guild.default_role, overwrite=overwrite)
+            await message.channel.send(view=LockView(target, True))
+        except discord.Forbidden:
+            await message.channel.send(view=FailedView("I don't have permission to lock that channel."))
+        except Exception as e:
+            await message.channel.send(view=FailedView(str(e)))
+
+    elif cmd == "unlock":
+        if not message.author.guild_permissions.manage_channels:
+            return
+        target = message.channel_mentions[0] if message.channel_mentions else message.channel
+        overwrite = target.overwrites_for(message.guild.default_role)
+        overwrite.send_messages = True
+        try:
+            await target.set_permissions(message.guild.default_role, overwrite=overwrite)
+            await message.channel.send(view=LockView(target, False))
+        except discord.Forbidden:
+            await message.channel.send(view=FailedView("I don't have permission to unlock that channel."))
+        except Exception as e:
+            await message.channel.send(view=FailedView(str(e)))
+
+    elif cmd == "afk":
+        reason = " ".join(args[1:]) if len(args) > 1 else "AFK"
+        if "afk" not in config:
+            config["afk"] = {}
+        config["afk"][str(message.author.id)] = {
+            "reason": reason,
+            "timestamp": int(datetime.now(timezone.utc).timestamp())
+        }
+        save_config(config)
+        await message.channel.send(view=AfkSetView(message.author, reason))
+
+    elif cmd == "snipe":
+        data = last_deleted.get(message.channel.id)
+        if not data:
+            await message.channel.send(view=SnipeEmptyView())
+        else:
+            await message.channel.send(view=SnipeView(data))
+
+    elif cmd == "avatar":
+        member = message.mentions[0] if message.mentions else message.author
+        embed = discord.Embed(title=f"{member.display_name}'s Avatar", color=discord.Color.blurple())
+        embed.set_image(url=str(member.display_avatar.url))
+        await message.channel.send(embed=embed)
+
+    elif cmd == "gstart":
+        if not message.author.guild_permissions.administrator:
+            return
+        if len(args) < 4:
+            await message.channel.send(view=FailedView("Usage: `.gstart <duration> <winners> <prize>`"))
+            return
+        duration_str = args[1]
+        try:
+            winner_count = int(args[2])
+        except ValueError:
+            await message.channel.send(view=FailedView("Winners must be a number."))
+            return
+        prize = " ".join(args[3:])
+        seconds = parse_duration(duration_str)
+        if seconds <= 0:
+            await message.channel.send(view=FailedView("Invalid duration. Example: `1h`, `30m`, `2d`"))
+            return
+        end_ts = int((datetime.now(timezone.utc) + timedelta(seconds=seconds)).timestamp())
+        msg = await message.channel.send(view=GiveawayActiveView(prize, winner_count, end_ts, 0))
+        if "giveaways" not in config:
+            config["giveaways"] = {}
+        config["giveaways"][str(msg.id)] = {
+            "channel_id": message.channel.id,
+            "prize": prize,
+            "winner_count": winner_count,
+            "end_timestamp": end_ts,
+            "entries": [],
+            "ended": False,
+            "winners": []
+        }
+        save_config(config)
+
+    elif cmd == "gend":
+        if not message.author.guild_permissions.administrator:
+            return
+        if len(args) < 2:
+            await message.channel.send(view=FailedView("Usage: `.gend <message_id>`"))
+            return
+        msg_id = args[1]
+        giveaways = config.get("giveaways", {})
+        if msg_id not in giveaways:
+            await message.channel.send(view=FailedView("Giveaway not found."))
+            return
+        gw = giveaways[msg_id]
+        if gw.get("ended"):
+            await message.channel.send(view=FailedView("Giveaway already ended."))
+            return
+        await end_giveaway(msg_id, gw)
+
+    elif cmd == "greroll":
+        if not message.author.guild_permissions.administrator:
+            return
+        if len(args) < 2:
+            await message.channel.send(view=FailedView("Usage: `.greroll <message_id>`"))
+            return
+        msg_id = args[1]
+        giveaways = config.get("giveaways", {})
+        if msg_id not in giveaways:
+            await message.channel.send(view=FailedView("Giveaway not found."))
+            return
+        gw = giveaways[msg_id]
+        if not gw.get("ended"):
+            await message.channel.send(view=FailedView("Giveaway hasn't ended yet."))
+            return
+        entries = gw["entries"]
+        if not entries:
+            await message.channel.send(view=FailedView("No entries to reroll from."))
+            return
+        picked = random.sample(entries, min(gw["winner_count"], len(entries)))
+        gw["winners"] = picked
+        save_config(config)
+        channel = bot.get_channel(gw["channel_id"])
+        winner_text = " ".join(f"<@{uid}>" for uid in picked)
+        if channel:
             try:
-                encoded = urllib.parse.quote(url, safe="")
-                timeout_cfg = aiohttp.ClientTimeout(total=120)
-                async with aiohttp.ClientSession(timeout=timeout_cfg) as session:
-                    async with session.get(API_URL + encoded) as res:
-                        data = await res.json(content_type=None)
-                        status = data.get("status")
-                        if status == "success":
-                            await msg.edit(view=SuccessView(data.get("result")))
-                        elif status in ("failed", "error"):
-                            await msg.edit(view=FailedView(data.get("message", "Failed to bypass")))
-                        else:
-                            await msg.edit(view=FailedView("Invalid API response."))
-            except asyncio.TimeoutError:
-                await msg.edit(view=FailedView("API request timed out."))
-            except Exception as e:
-                print("Error:", e)
-                await msg.edit(view=FailedView(str(e)))
+                original = await channel.fetch_message(int(msg_id))
+                await channel.send(f"🎉 Giveaway rerolled! **{gw['prize']}**\nNew winner(s): {winner_text}", reference=original)
+            except Exception:
+                pass
+        await message.channel.send(view=GiveawayRerollView(picked))
 
 
 @bot.event
