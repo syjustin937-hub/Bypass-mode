@@ -306,33 +306,15 @@ class HelpView(discord.ui.LayoutView):
                 discord.ui.TextDisplay(
                     "**Utility Commands**\n"
                     "`.ping`\n"
-                    "`.serverinfo`\n"
                     "`.say #channel <message>`\n"
                     "`.afk [reason]`\n"
                     "`.snipe`\n"
                     "`.avatar [@user]`\n"
                     "`.bypass <link>`\n"
-                    "`.stealemoji <emoji> [name]`\n"
-                    "`.addemoji <name> <url>`\n"
-                    "`.addsticker <name> [desc]` — reply to sticker\n"
+                    "`.steal <emoji>`\n"
+                    "`.scatter <bet>`\n"
+                    "`.balance`\n"
                     "`.help`"
-                ),
-                discord.ui.Separator(),
-                discord.ui.TextDisplay(
-                    "**Economy Commands**\n"
-                    "`.balance [@user]` / `.bal`\n"
-                    "`.daily` `.work` `.slut` `.crime`\n"
-                    "`.hunt` `.search` `.beg` `.mine` `.fish` `.dig`\n"
-                    "`.deposit <amount|all>` / `.dep`\n"
-                    "`.withdraw <amount|all>` / `.with`\n"
-                    "`.send @user <amount>` / `.pay` / `.give`\n"
-                    "`.steal @user` / `.rob`\n"
-                    "`.gamble <amount|all>` / `.bet`\n"
-                    "`.coinflip <heads|tails> <amount|all>` / `.cf`\n"
-                    "`.scatter <amount|all>`\n"
-                    "`.highlow <high|low> <amount|all>` / `.hl`\n"
-                    "`.shop list` `.shop inventory` `.shop sell <item>`\n"
-                    "`.setcoins @user <amount>` — Server Owner only"
                 ),
                 discord.ui.Separator(),
                 discord.ui.TextDisplay(f"Prefix: `.` | All commands also available as `/command`"),
@@ -787,6 +769,86 @@ class GiveawayRerollView(discord.ui.LayoutView):
         )
 
 
+class InfoView(discord.ui.LayoutView):
+    def __init__(self, title: str, body: str, color: discord.Color = discord.Color.blurple()):
+        super().__init__(timeout=None)
+        self.add_item(
+            discord.ui.Container(
+                discord.ui.TextDisplay(f"# {title}"),
+                discord.ui.Separator(),
+                discord.ui.TextDisplay(body),
+                accent_color=color
+            )
+        )
+
+
+EMOJI_RE = re.compile(r"<(a?):(\w{2,32}):(\d+)>")
+
+
+async def steal_emoji(guild: discord.Guild, text: str, reason: str) -> discord.ui.LayoutView:
+    match = EMOJI_RE.search(text or "")
+    if not match:
+        return InfoView("Failed!", "No custom emoji found.", discord.Color.red())
+    animated, name, eid = match.groups()
+    ext = "gif" if animated else "png"
+    url = f"https://cdn.discordapp.com/emojis/{eid}.{ext}"
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url) as res:
+                if res.status != 200:
+                    return InfoView("Failed!", "Could not download that emoji.", discord.Color.red())
+                data = await res.read()
+        emoji = await guild.create_custom_emoji(name=name, image=data, reason=reason)
+        return InfoView("Emoji Stolen", f"Added {emoji} as `:{emoji.name}:`", discord.Color.green())
+    except discord.Forbidden:
+        return InfoView("Failed!", "I don't have permission to manage emojis.", discord.Color.red())
+    except discord.HTTPException as e:
+        return InfoView("Failed!", str(e), discord.Color.red())
+
+
+SCATTER_SYMBOLS = ["🍒", "🍋", "🔔", "💎", "7️⃣"]
+SCATTER_WEIGHTS = [30, 25, 20, 15, 10]
+SCATTER_PAYOUT = {"🍒": 3, "🍋": 4, "🔔": 6, "💎": 10, "7️⃣": 25}
+STARTING_COINS = 1000
+
+
+def get_balance(uid: int) -> int:
+    return config.get("coins", {}).get(str(uid), STARTING_COINS)
+
+
+def set_balance(uid: int, amount: int):
+    config.setdefault("coins", {})[str(uid)] = amount
+    save_config(config)
+
+
+def scatter_result(uid: int, bet: int) -> discord.ui.LayoutView:
+    balance = get_balance(uid)
+    if bet <= 0:
+        return FailedView("Bet must be at least 1.")
+    if bet > balance:
+        return FailedView(f"Not enough coins. Balance: **{balance}**")
+    reels = random.choices(SCATTER_SYMBOLS, weights=SCATTER_WEIGHTS, k=3)
+    top = max(reels.count(s) for s in reels)
+    if top == 3:
+        net = bet * (SCATTER_PAYOUT[reels[0]] - 1)
+        title, color = "🎰 Scatter — WIN", discord.Color.green()
+    elif top == 2:
+        net = 0
+        title, color = "🎰 Scatter — PUSH", discord.Color.blurple()
+    else:
+        net = -bet
+        title, color = "🎰 Scatter — LOSE", discord.Color.red()
+    new_balance = balance + net
+    set_balance(uid, new_balance)
+    body = (
+        f"## {' | '.join(reels)}\n"
+        f"**Bet:** {bet}\n"
+        f"**Net:** {net:+}\n"
+        f"**Balance:** {new_balance}"
+    )
+    return InfoView(title, body, color)
+
+
 @tree.command(name="help", description="Show all commands", guild=discord.Object(id=GUILD_ID))
 async def help_cmd(interaction: discord.Interaction):
     await interaction.response.send_message(view=HelpView())
@@ -1028,6 +1090,26 @@ async def avatar_cmd(interaction: discord.Interaction, member: discord.Member = 
     embed = discord.Embed(title=f"{target.display_name}'s Avatar", color=discord.Color.blurple())
     embed.set_image(url=str(target.display_avatar.url))
     await interaction.response.send_message(embed=embed)
+
+
+@tree.command(name="steal", description="Steal a custom emoji into this server", guild=discord.Object(id=GUILD_ID))
+@discord.app_commands.describe(emoji="The custom emoji to steal")
+@discord.app_commands.default_permissions(manage_emojis_and_stickers=True)
+async def steal_cmd(interaction: discord.Interaction, emoji: str):
+    await interaction.response.defer(ephemeral=True)
+    view = await steal_emoji(interaction.guild, emoji, f"Stolen by {interaction.user}")
+    await interaction.followup.send(view=view, ephemeral=True)
+
+
+@tree.command(name="scatter", description="Play scatter slots with virtual coins", guild=discord.Object(id=GUILD_ID))
+@discord.app_commands.describe(bet="Coins to bet")
+async def scatter_cmd(interaction: discord.Interaction, bet: int):
+    await interaction.response.send_message(view=scatter_result(interaction.user.id, bet))
+
+
+@tree.command(name="balance", description="Check your coin balance", guild=discord.Object(id=GUILD_ID))
+async def balance_cmd(interaction: discord.Interaction):
+    await interaction.response.send_message(view=InfoView("💰 Balance", f"**Coins:** {get_balance(interaction.user.id)}"))
 
 
 verify_group = discord.app_commands.Group(
@@ -1530,20 +1612,22 @@ async def on_message(message):
                 pass
         await message.channel.send(view=GiveawayRerollView(picked))
 
-    else:
-        # Try economy commands
-        eco_cmds = {
-            "balance", "bal", "setcoins", "daily", "deposit", "dep",
-            "withdraw", "with", "send", "pay", "give", "steal", "rob",
-            "work", "slut", "crime", "hunt", "search", "beg", "mine",
-            "fish", "dig", "gamble", "bet", "coinflip", "cf", "scatter",
-            "highlow", "hl", "shop"
-        }
-        util_cmds = {"serverinfo", "stealemoji", "addemoji", "addsticker"}
-        if cmd in eco_cmds:
-            await handle_economy(message, cmd, args)
-        elif cmd in util_cmds:
-            await handle_extra_utility(message, cmd, args)
+    elif cmd == "steal":
+        if not message.author.guild_permissions.manage_emojis_and_stickers:
+            return
+        text = " ".join(args[1:])
+        if not text and message.reference:
+            text = getattr(message.reference.resolved, "content", "")
+        await message.channel.send(view=await steal_emoji(message.guild, text, f"Stolen by {message.author}"))
+
+    elif cmd == "scatter":
+        if len(args) < 2 or not args[1].isdigit():
+            await message.channel.send(view=FailedView("Usage: `.scatter <bet>`"))
+            return
+        await message.channel.send(view=scatter_result(message.author.id, int(args[1])))
+
+    elif cmd == "balance":
+        await message.channel.send(view=InfoView("💰 Balance", f"**Coins:** {get_balance(message.author.id)}"))
 
 
 @bot.event
@@ -1557,630 +1641,3 @@ async def on_ready():
 
 
 bot.run(TOKEN)
-
-
-# ─── ECONOMY SYSTEM ───────────────────────────────────────────────────────────
-
-ECONOMY_FILE = "economy.json"
-
-def load_economy():
-    if os.path.exists(ECONOMY_FILE):
-        with open(ECONOMY_FILE, "r") as f:
-            return json.load(f)
-    return {}
-
-def save_economy(data):
-    with open(ECONOMY_FILE, "w") as f:
-        json.dump(data, f, indent=2)
-
-def get_user(data, uid):
-    uid = str(uid)
-    if uid not in data:
-        data[uid] = {"wallet": 0, "bank": 0, "last_daily": 0, "last_work": 0,
-                     "last_slut": 0, "last_crime": 0, "last_hunt": 0,
-                     "last_search": 0, "last_beg": 0, "last_mine": 0,
-                     "last_fish": 0, "last_dig": 0, "inventory": []}
-    return data[uid]
-
-def economy_embed(title, desc, color=discord.Color.gold()):
-    e = discord.Embed(title=title, description=desc, color=color)
-    return e
-
-COOLDOWNS = {
-    "daily": 86400, "work": 3600, "slut": 1800, "crime": 3600,
-    "hunt": 1800, "search": 900, "beg": 600, "mine": 3600,
-    "fish": 1800, "dig": 2700
-}
-
-WORK_MSGS = ["You fixed some bugs", "You delivered packages", "You walked dogs",
-             "You mowed lawns", "You tutored students", "You drove for a rideshare"]
-SLUT_MSGS = ["You did an onlyfans shoot", "You danced at a club", "You modeled online"]
-CRIME_MSGS = ["You robbed a store", "You hacked an account", "You pickpocketed someone"]
-HUNT_MSGS = ["You hunted a deer", "You caught a rabbit", "You bagged a boar"]
-SEARCH_MSGS = ["You searched the couch", "You found a wallet", "You dug through trash"]
-BEG_MSGS = ["Someone felt generous", "A stranger tossed you coins", "You busked downtown"]
-MINE_MSGS = ["You mined coal", "You found iron", "You struck gold veins"]
-FISH_MSGS = ["You caught a tuna", "You reeled in a bass", "You got a rare koi"]
-DIG_MSGS = ["You dug up old coins", "You found buried treasure", "You unearthed artifacts"]
-
-SHOP_ITEMS = {
-    "shovel": {"price": 500, "desc": "Dig deeper for more coins"},
-    "fishing_rod": {"price": 750, "desc": "Catch bigger fish"},
-    "pickaxe": {"price": 1000, "desc": "Mine faster"},
-    "rifle": {"price": 1500, "desc": "Better hunting results"},
-    "laptop": {"price": 2000, "desc": "Work from home faster"},
-}
-
-def check_cooldown(user_data, action):
-    now = int(datetime.now(timezone.utc).timestamp())
-    last = user_data.get(f"last_{action}", 0)
-    cd = COOLDOWNS.get(action, 0)
-    remaining = (last + cd) - now
-    return remaining if remaining > 0 else 0
-
-def format_cd(seconds):
-    if seconds <= 0:
-        return "Ready!"
-    h, r = divmod(int(seconds), 3600)
-    m, s = divmod(r, 60)
-    parts = []
-    if h: parts.append(f"{h}h")
-    if m: parts.append(f"{m}m")
-    if s: parts.append(f"{s}s")
-    return " ".join(parts)
-
-
-# ─── ECONOMY VIEWS ────────────────────────────────────────────────────────────
-
-class BalanceView(discord.ui.LayoutView):
-    def __init__(self, member, wallet, bank):
-        super().__init__(timeout=None)
-        self.add_item(discord.ui.Container(
-            discord.ui.TextDisplay(f"# 💰 {member.display_name}'s Balance"),
-            discord.ui.Separator(),
-            discord.ui.TextDisplay(
-                f"**Wallet:** 🪙 {wallet:,}\n"
-                f"**Bank:** 🏦 {bank:,}\n"
-                f"**Total:** 💎 {wallet + bank:,}"
-            ),
-            accent_color=discord.Color.gold()
-        ))
-
-class EconomyView(discord.ui.LayoutView):
-    def __init__(self, title, desc, color=discord.Color.gold()):
-        super().__init__(timeout=None)
-        self.add_item(discord.ui.Container(
-            discord.ui.TextDisplay(f"# {title}"),
-            discord.ui.Separator(),
-            discord.ui.TextDisplay(desc),
-            accent_color=color
-        ))
-
-class ShopListView(discord.ui.LayoutView):
-    def __init__(self):
-        super().__init__(timeout=None)
-        lines = []
-        for item, info in SHOP_ITEMS.items():
-            lines.append(f"**{item.replace('_',' ').title()}** — 🪙 {info['price']:,}\n> {info['desc']}")
-        self.add_item(discord.ui.Container(
-            discord.ui.TextDisplay("# 🛒 Shop"),
-            discord.ui.Separator(),
-            discord.ui.TextDisplay("\n\n".join(lines)),
-            accent_color=discord.Color.blurple()
-        ))
-
-class InventoryView(discord.ui.LayoutView):
-    def __init__(self, member, inventory):
-        super().__init__(timeout=None)
-        if not inventory:
-            body = "Your inventory is empty."
-        else:
-            from collections import Counter
-            counts = Counter(inventory)
-            body = "\n".join(f"**{k.replace('_',' ').title()}** x{v}" for k, v in counts.items())
-        self.add_item(discord.ui.Container(
-            discord.ui.TextDisplay(f"# 🎒 {member.display_name}'s Inventory"),
-            discord.ui.Separator(),
-            discord.ui.TextDisplay(body),
-            accent_color=discord.Color.green()
-        ))
-
-
-# ─── ECONOMY PREFIX HANDLERS (injected into on_message) ──────────────────────
-
-async def handle_economy(message, cmd, args):
-    eco = load_economy()
-    uid = str(message.author.id)
-    user = get_user(eco, uid)
-    now = int(datetime.now(timezone.utc).timestamp())
-
-    # ── balance ──
-    if cmd in ("balance", "bal"):
-        target = message.mentions[0] if message.mentions else message.author
-        t_uid = str(target.id)
-        t_user = get_user(eco, t_uid)
-        await message.channel.send(view=BalanceView(target, t_user["wallet"], t_user["bank"]))
-
-    # ── setcoins (owner only) ──
-    elif cmd == "setcoins":
-        if message.author.id != message.guild.owner_id:
-            await message.channel.send(view=EconomyView("❌ Denied", "Server Owner only.", discord.Color.red()))
-            return
-        if not message.mentions or len(args) < 3:
-            await message.channel.send(view=EconomyView("❌ Usage", "`.setcoins @user <amount>`", discord.Color.red()))
-            return
-        try:
-            amt = int(args[2])
-        except ValueError:
-            await message.channel.send(view=EconomyView("❌ Error", "Amount must be a number.", discord.Color.red()))
-            return
-        t_uid = str(message.mentions[0].id)
-        t_user = get_user(eco, t_uid)
-        t_user["wallet"] = amt
-        save_economy(eco)
-        await message.channel.send(view=EconomyView("✅ Coins Set", f"Set {message.mentions[0].mention}'s wallet to 🪙 {amt:,}"))
-
-    # ── daily ──
-    elif cmd == "daily":
-        cd = check_cooldown(user, "daily")
-        if cd:
-            await message.channel.send(view=EconomyView("⏳ Cooldown", f"Daily resets in **{format_cd(cd)}**", discord.Color.orange()))
-            return
-        amount = random.randint(200, 500)
-        user["wallet"] += amount
-        user["last_daily"] = now
-        save_economy(eco)
-        await message.channel.send(view=EconomyView("📅 Daily Reward", f"You claimed 🪙 **{amount:,}** coins!\n**Wallet:** {user['wallet']:,}"))
-
-    # ── deposit ──
-    elif cmd in ("deposit", "dep"):
-        if len(args) < 2:
-            await message.channel.send(view=EconomyView("❌ Usage", "`.deposit <amount|all>`", discord.Color.red()))
-            return
-        amt = user["wallet"] if args[1].lower() == "all" else int(args[1])
-        amt = min(amt, user["wallet"])
-        if amt <= 0:
-            await message.channel.send(view=EconomyView("❌ Error", "Nothing to deposit.", discord.Color.red()))
-            return
-        user["wallet"] -= amt
-        user["bank"] += amt
-        save_economy(eco)
-        await message.channel.send(view=EconomyView("🏦 Deposited", f"Deposited 🪙 **{amt:,}** to bank.\n**Bank:** {user['bank']:,}"))
-
-    # ── withdraw ──
-    elif cmd in ("withdraw", "with"):
-        if len(args) < 2:
-            await message.channel.send(view=EconomyView("❌ Usage", "`.withdraw <amount|all>`", discord.Color.red()))
-            return
-        amt = user["bank"] if args[1].lower() == "all" else int(args[1])
-        amt = min(amt, user["bank"])
-        if amt <= 0:
-            await message.channel.send(view=EconomyView("❌ Error", "Nothing to withdraw.", discord.Color.red()))
-            return
-        user["bank"] -= amt
-        user["wallet"] += amt
-        save_economy(eco)
-        await message.channel.send(view=EconomyView("💸 Withdrawn", f"Withdrew 🪙 **{amt:,}** to wallet.\n**Wallet:** {user['wallet']:,}"))
-
-    # ── send/pay/give ──
-    elif cmd in ("send", "pay", "give"):
-        if not message.mentions or len(args) < 3:
-            await message.channel.send(view=EconomyView("❌ Usage", "`.send @user <amount>`", discord.Color.red()))
-            return
-        try:
-            amt = int(args[2])
-        except ValueError:
-            await message.channel.send(view=EconomyView("❌ Error", "Amount must be a number.", discord.Color.red()))
-            return
-        if amt <= 0 or amt > user["wallet"]:
-            await message.channel.send(view=EconomyView("❌ Error", "Invalid amount or insufficient funds.", discord.Color.red()))
-            return
-        t_uid = str(message.mentions[0].id)
-        if t_uid == uid:
-            await message.channel.send(view=EconomyView("❌ Error", "You can't send coins to yourself.", discord.Color.red()))
-            return
-        t_user = get_user(eco, t_uid)
-        user["wallet"] -= amt
-        t_user["wallet"] += amt
-        save_economy(eco)
-        await message.channel.send(view=EconomyView("💸 Sent", f"Sent 🪙 **{amt:,}** to {message.mentions[0].mention}"))
-
-    # ── steal/rob ──
-    elif cmd in ("steal", "rob"):
-        if not message.mentions:
-            await message.channel.send(view=EconomyView("❌ Usage", "`.steal @user`", discord.Color.red()))
-            return
-        t_uid = str(message.mentions[0].id)
-        if t_uid == uid:
-            await message.channel.send(view=EconomyView("❌ Error", "Can't rob yourself.", discord.Color.red()))
-            return
-        t_user = get_user(eco, t_uid)
-        if t_user["wallet"] <= 0:
-            await message.channel.send(view=EconomyView("💀 Failed", f"{message.mentions[0].mention} has nothing to steal.", discord.Color.red()))
-            return
-        success = random.random() < 0.45
-        if success:
-            stolen = random.randint(1, max(1, t_user["wallet"] // 3))
-            t_user["wallet"] -= stolen
-            user["wallet"] += stolen
-            save_economy(eco)
-            await message.channel.send(view=EconomyView("🦹 Robbery Success!", f"You stole 🪙 **{stolen:,}** from {message.mentions[0].mention}!"))
-        else:
-            fine = random.randint(50, 200)
-            user["wallet"] = max(0, user["wallet"] - fine)
-            save_economy(eco)
-            await message.channel.send(view=EconomyView("🚔 Caught!", f"You got caught and paid 🪙 **{fine:,}** fine.", discord.Color.red()))
-
-    # ── work ──
-    elif cmd == "work":
-        cd = check_cooldown(user, "work")
-        if cd:
-            await message.channel.send(view=EconomyView("⏳ Cooldown", f"Work again in **{format_cd(cd)}**", discord.Color.orange()))
-            return
-        amount = random.randint(100, 350)
-        user["wallet"] += amount
-        user["last_work"] = now
-        save_economy(eco)
-        msg = random.choice(WORK_MSGS)
-        await message.channel.send(view=EconomyView("💼 Work", f"{msg} and earned 🪙 **{amount:,}**!\n**Wallet:** {user['wallet']:,}"))
-
-    # ── slut ──
-    elif cmd == "slut":
-        cd = check_cooldown(user, "slut")
-        if cd:
-            await message.channel.send(view=EconomyView("⏳ Cooldown", f"Try again in **{format_cd(cd)}**", discord.Color.orange()))
-            return
-        success = random.random() < 0.75
-        if success:
-            amount = random.randint(150, 400)
-            user["wallet"] += amount
-            msg = random.choice(SLUT_MSGS)
-            await message.channel.send(view=EconomyView("💋 Slut", f"{msg} and earned 🪙 **{amount:,}**!\n**Wallet:** {user['wallet']:,}", discord.Color.magenta()))
-        else:
-            fine = random.randint(50, 150)
-            user["wallet"] = max(0, user["wallet"] - fine)
-            await message.channel.send(view=EconomyView("😬 Failed", f"You got rejected and lost 🪙 **{fine:,}**.", discord.Color.red()))
-        user["last_slut"] = now
-        save_economy(eco)
-
-    # ── crime ──
-    elif cmd == "crime":
-        cd = check_cooldown(user, "crime")
-        if cd:
-            await message.channel.send(view=EconomyView("⏳ Cooldown", f"Try again in **{format_cd(cd)}**", discord.Color.orange()))
-            return
-        success = random.random() < 0.6
-        if success:
-            amount = random.randint(200, 600)
-            user["wallet"] += amount
-            msg = random.choice(CRIME_MSGS)
-            await message.channel.send(view=EconomyView("🔫 Crime", f"{msg} and got 🪙 **{amount:,}**!", discord.Color.dark_red()))
-        else:
-            fine = random.randint(100, 300)
-            user["wallet"] = max(0, user["wallet"] - fine)
-            await message.channel.send(view=EconomyView("🚔 Arrested!", f"You got caught and fined 🪙 **{fine:,}**.", discord.Color.red()))
-        user["last_crime"] = now
-        save_economy(eco)
-
-    # ── hunt ──
-    elif cmd == "hunt":
-        cd = check_cooldown(user, "hunt")
-        if cd:
-            await message.channel.send(view=EconomyView("⏳ Cooldown", f"Hunt again in **{format_cd(cd)}**", discord.Color.orange()))
-            return
-        amount = random.randint(80, 300)
-        user["wallet"] += amount
-        user["last_hunt"] = now
-        save_economy(eco)
-        msg = random.choice(HUNT_MSGS)
-        await message.channel.send(view=EconomyView("🏹 Hunt", f"{msg} and earned 🪙 **{amount:,}**!", discord.Color.dark_green()))
-
-    # ── search ──
-    elif cmd == "search":
-        cd = check_cooldown(user, "search")
-        if cd:
-            await message.channel.send(view=EconomyView("⏳ Cooldown", f"Search again in **{format_cd(cd)}**", discord.Color.orange()))
-            return
-        amount = random.randint(10, 100)
-        user["wallet"] += amount
-        user["last_search"] = now
-        save_economy(eco)
-        msg = random.choice(SEARCH_MSGS)
-        await message.channel.send(view=EconomyView("🔍 Search", f"{msg} and found 🪙 **{amount:,}**!"))
-
-    # ── beg ──
-    elif cmd == "beg":
-        cd = check_cooldown(user, "beg")
-        if cd:
-            await message.channel.send(view=EconomyView("⏳ Cooldown", f"Beg again in **{format_cd(cd)}**", discord.Color.orange()))
-            return
-        amount = random.randint(5, 75)
-        user["wallet"] += amount
-        user["last_beg"] = now
-        save_economy(eco)
-        msg = random.choice(BEG_MSGS)
-        await message.channel.send(view=EconomyView("🙏 Beg", f"{msg} gave you 🪙 **{amount:,}**!"))
-
-    # ── mine ──
-    elif cmd == "mine":
-        cd = check_cooldown(user, "mine")
-        if cd:
-            await message.channel.send(view=EconomyView("⏳ Cooldown", f"Mine again in **{format_cd(cd)}**", discord.Color.orange()))
-            return
-        amount = random.randint(100, 400)
-        user["wallet"] += amount
-        user["last_mine"] = now
-        save_economy(eco)
-        msg = random.choice(MINE_MSGS)
-        await message.channel.send(view=EconomyView("⛏️ Mine", f"{msg} and earned 🪙 **{amount:,}**!", discord.Color.dark_grey()))
-
-    # ── fish ──
-    elif cmd == "fish":
-        cd = check_cooldown(user, "fish")
-        if cd:
-            await message.channel.send(view=EconomyView("⏳ Cooldown", f"Fish again in **{format_cd(cd)}**", discord.Color.orange()))
-            return
-        amount = random.randint(60, 250)
-        user["wallet"] += amount
-        user["last_fish"] = now
-        save_economy(eco)
-        msg = random.choice(FISH_MSGS)
-        await message.channel.send(view=EconomyView("🎣 Fish", f"{msg} worth 🪙 **{amount:,}**!", discord.Color.blue()))
-
-    # ── dig ──
-    elif cmd == "dig":
-        cd = check_cooldown(user, "dig")
-        if cd:
-            await message.channel.send(view=EconomyView("⏳ Cooldown", f"Dig again in **{format_cd(cd)}**", discord.Color.orange()))
-            return
-        amount = random.randint(50, 300)
-        user["wallet"] += amount
-        user["last_dig"] = now
-        save_economy(eco)
-        msg = random.choice(DIG_MSGS)
-        await message.channel.send(view=EconomyView("🪣 Dig", f"{msg} worth 🪙 **{amount:,}**!", discord.Color.dark_orange()))
-
-    # ── gamble/bet ──
-    elif cmd in ("gamble", "bet"):
-        if len(args) < 2:
-            await message.channel.send(view=EconomyView("❌ Usage", "`.gamble <amount|all>`", discord.Color.red()))
-            return
-        amt = user["wallet"] if args[1].lower() == "all" else int(args[1])
-        amt = min(amt, user["wallet"])
-        if amt <= 0:
-            await message.channel.send(view=EconomyView("❌ Error", "Not enough coins.", discord.Color.red()))
-            return
-        win = random.random() < 0.45
-        if win:
-            user["wallet"] += amt
-            await message.channel.send(view=EconomyView("🎰 Win!", f"You won 🪙 **{amt:,}**!\n**Wallet:** {user['wallet']:,}", discord.Color.green()))
-        else:
-            user["wallet"] -= amt
-            await message.channel.send(view=EconomyView("🎰 Loss!", f"You lost 🪙 **{amt:,}**.\n**Wallet:** {user['wallet']:,}", discord.Color.red()))
-        save_economy(eco)
-
-    # ── coinflip/cf ──
-    elif cmd in ("coinflip", "cf"):
-        if len(args) < 3:
-            await message.channel.send(view=EconomyView("❌ Usage", "`.cf <heads|tails> <amount|all>`", discord.Color.red()))
-            return
-        choice = args[1].lower()
-        if choice not in ("heads", "tails"):
-            await message.channel.send(view=EconomyView("❌ Error", "Choose `heads` or `tails`.", discord.Color.red()))
-            return
-        amt = user["wallet"] if args[2].lower() == "all" else int(args[2])
-        amt = min(amt, user["wallet"])
-        if amt <= 0:
-            await message.channel.send(view=EconomyView("❌ Error", "Not enough coins.", discord.Color.red()))
-            return
-        result = random.choice(["heads", "tails"])
-        won = choice == result
-        if won:
-            user["wallet"] += amt
-            await message.channel.send(view=EconomyView(f"🪙 {result.title()}!", f"Correct! You won 🪙 **{amt:,}**!\n**Wallet:** {user['wallet']:,}", discord.Color.green()))
-        else:
-            user["wallet"] -= amt
-            await message.channel.send(view=EconomyView(f"🪙 {result.title()}!", f"Wrong! You lost 🪙 **{amt:,}**.\n**Wallet:** {user['wallet']:,}", discord.Color.red()))
-        save_economy(eco)
-
-    # ── scatter ──
-    elif cmd == "scatter":
-        if len(args) < 2:
-            await message.channel.send(view=EconomyView("❌ Usage", "`.scatter <amount|all>`", discord.Color.red()))
-            return
-        amt = user["wallet"] if args[1].lower() == "all" else int(args[1])
-        amt = min(amt, user["wallet"])
-        if amt <= 0:
-            await message.channel.send(view=EconomyView("❌ Error", "Not enough coins.", discord.Color.red()))
-            return
-        multiplier = random.choice([0, 0, 0.5, 1.5, 2, 3])
-        winnings = int(amt * multiplier)
-        user["wallet"] = user["wallet"] - amt + winnings
-        save_economy(eco)
-        if winnings > amt:
-            await message.channel.send(view=EconomyView("🎲 Scatter Win!", f"Multiplier: **{multiplier}x** — Won 🪙 **{winnings:,}**!\n**Wallet:** {user['wallet']:,}", discord.Color.green()))
-        elif winnings == 0:
-            await message.channel.send(view=EconomyView("🎲 Scatter Loss!", f"Multiplier: **0x** — Lost 🪙 **{amt:,}**.\n**Wallet:** {user['wallet']:,}", discord.Color.red()))
-        else:
-            await message.channel.send(view=EconomyView("🎲 Scatter", f"Multiplier: **{multiplier}x** — Got 🪙 **{winnings:,}**.\n**Wallet:** {user['wallet']:,}", discord.Color.orange()))
-
-    # ── highlow/hl ──
-    elif cmd in ("highlow", "hl"):
-        if len(args) < 3:
-            await message.channel.send(view=EconomyView("❌ Usage", "`.hl <high|low> <amount|all>`", discord.Color.red()))
-            return
-        guess = args[1].lower()
-        if guess not in ("high", "low"):
-            await message.channel.send(view=EconomyView("❌ Error", "Choose `high` or `low`.", discord.Color.red()))
-            return
-        amt = user["wallet"] if args[2].lower() == "all" else int(args[2])
-        amt = min(amt, user["wallet"])
-        if amt <= 0:
-            await message.channel.send(view=EconomyView("❌ Error", "Not enough coins.", discord.Color.red()))
-            return
-        number = random.randint(1, 100)
-        correct = (guess == "high" and number > 50) or (guess == "low" and number <= 50)
-        if correct:
-            user["wallet"] += amt
-            await message.channel.send(view=EconomyView("📊 High/Low Win!", f"Number was **{number}** — Correct!\nWon 🪙 **{amt:,}**!\n**Wallet:** {user['wallet']:,}", discord.Color.green()))
-        else:
-            user["wallet"] -= amt
-            await message.channel.send(view=EconomyView("📊 High/Low Loss!", f"Number was **{number}** — Wrong!\nLost 🪙 **{amt:,}**.\n**Wallet:** {user['wallet']:,}", discord.Color.red()))
-        save_economy(eco)
-
-    # ── shop inventory ──
-    elif cmd == "shop":
-        sub = args[1].lower() if len(args) > 1 else ""
-        if sub == "list" or sub == "":
-            await message.channel.send(view=ShopListView())
-        elif sub == "inventory":
-            await message.channel.send(view=InventoryView(message.author, user.get("inventory", [])))
-        elif sub == "sell":
-            inv = user.get("inventory", [])
-            if not inv:
-                await message.channel.send(view=EconomyView("❌ Error", "Your inventory is empty.", discord.Color.red()))
-                return
-            item = args[2].lower().replace(" ", "_") if len(args) > 2 else ""
-            if item not in inv:
-                await message.channel.send(view=EconomyView("❌ Error", f"You don't have `{item}` in your inventory.", discord.Color.red()))
-                return
-            sell_price = SHOP_ITEMS.get(item, {}).get("price", 100) // 2
-            inv.remove(item)
-            user["wallet"] += sell_price
-            save_economy(eco)
-            await message.channel.send(view=EconomyView("✅ Sold", f"Sold **{item.replace('_',' ').title()}** for 🪙 **{sell_price:,}**!\n**Wallet:** {user['wallet']:,}"))
-        elif sub == "buy":
-            item = args[2].lower().replace(" ", "_") if len(args) > 2 else ""
-            if item not in SHOP_ITEMS:
-                await message.channel.send(view=EconomyView("❌ Error", f"Item `{item}` not found in shop.", discord.Color.red()))
-                return
-            price = SHOP_ITEMS[item]["price"]
-            if user["wallet"] < price:
-                await message.channel.send(view=EconomyView("❌ Error", f"Not enough coins. Need 🪙 **{price:,}**.", discord.Color.red()))
-                return
-            user["wallet"] -= price
-            if "inventory" not in user:
-                user["inventory"] = []
-            user["inventory"].append(item)
-            save_economy(eco)
-            await message.channel.send(view=EconomyView("✅ Purchased", f"Bought **{item.replace('_',' ').title()}** for 🪙 **{price:,}**!"))
-        else:
-            await message.channel.send(view=ShopListView())
-
-    else:
-        return False
-    return True
-
-
-# ─── EXTRA UTILITY HANDLERS ───────────────────────────────────────────────────
-
-async def handle_extra_utility(message, cmd, args):
-
-    # ── serverinfo ──
-    if cmd == "serverinfo":
-        guild = message.guild
-        embed = discord.Embed(title=f"🏰 {guild.name}", color=discord.Color.blurple())
-        embed.add_field(name="Owner", value=f"<@{guild.owner_id}>", inline=True)
-        embed.add_field(name="Members", value=f"{guild.member_count:,}", inline=True)
-        embed.add_field(name="Channels", value=str(len(guild.channels)), inline=True)
-        embed.add_field(name="Roles", value=str(len(guild.roles)), inline=True)
-        embed.add_field(name="Boosts", value=str(guild.premium_subscription_count), inline=True)
-        embed.add_field(name="Created", value=f"<t:{int(guild.created_at.timestamp())}:R>", inline=True)
-        if guild.icon:
-            embed.set_thumbnail(url=guild.icon.url)
-        await message.channel.send(embed=embed)
-        return True
-
-    # ── stealemoji ──
-    elif cmd == "stealemoji":
-        if not message.author.guild_permissions.manage_emojis:
-            await message.channel.send(view=EconomyView("❌ Denied", "You need Manage Emojis permission.", discord.Color.red()))
-            return True
-        # reply to emoji: get from reference
-        if message.reference:
-            ref = await message.channel.fetch_message(message.reference.message_id)
-            name = args[1] if len(args) > 1 else None
-            import re as _re
-            emoji_pattern = _re.compile(r"<a?:(\w+):(\d+)>")
-            matches = emoji_pattern.findall(ref.content)
-            if not matches:
-                await message.channel.send(view=EconomyView("❌ Error", "No custom emoji found in replied message.", discord.Color.red()))
-                return True
-            e_name, e_id = matches[0]
-            use_name = name or e_name
-            ext = "gif" if ref.content.startswith("<a:") else "png"
-            url = f"https://cdn.discordapp.com/emojis/{e_id}.{ext}"
-        elif len(args) >= 2:
-            # stealemoji <emoji> [name] — emoji as text
-            import re as _re
-            emoji_pattern = _re.compile(r"<a?:(\w+):(\d+)>")
-            matches = emoji_pattern.findall(args[1])
-            if not matches:
-                await message.channel.send(view=EconomyView("❌ Error", "Provide a custom emoji.", discord.Color.red()))
-                return True
-            e_name, e_id = matches[0]
-            use_name = args[2] if len(args) > 2 else e_name
-            anim = args[1].startswith("<a:")
-            ext = "gif" if anim else "png"
-            url = f"https://cdn.discordapp.com/emojis/{e_id}.{ext}"
-        else:
-            await message.channel.send(view=EconomyView("❌ Usage", "`.stealemoji <emoji> [name]` or reply to a message", discord.Color.red()))
-            return True
-        try:
-            async with aiohttp.ClientSession() as session:
-                async with session.get(url) as resp:
-                    img_data = await resp.read()
-            new_emoji = await message.guild.create_custom_emoji(name=use_name, image=img_data)
-            await message.channel.send(view=EconomyView("✅ Emoji Stolen", f"Added {new_emoji} as `:{use_name}:`"))
-        except Exception as e:
-            await message.channel.send(view=EconomyView("❌ Failed", str(e), discord.Color.red()))
-        return True
-
-    # ── addemoji ──
-    elif cmd == "addemoji":
-        if not message.author.guild_permissions.manage_emojis:
-            await message.channel.send(view=EconomyView("❌ Denied", "You need Manage Emojis permission.", discord.Color.red()))
-            return True
-        if len(args) < 3:
-            await message.channel.send(view=EconomyView("❌ Usage", "`.addemoji <name> <url>`", discord.Color.red()))
-            return True
-        name = args[1]
-        url = args[2]
-        try:
-            async with aiohttp.ClientSession() as session:
-                async with session.get(url) as resp:
-                    img_data = await resp.read()
-            new_emoji = await message.guild.create_custom_emoji(name=name, image=img_data)
-            await message.channel.send(view=EconomyView("✅ Emoji Added", f"Added {new_emoji} as `:{name}:`"))
-        except Exception as e:
-            await message.channel.send(view=EconomyView("❌ Failed", str(e), discord.Color.red()))
-        return True
-
-    # ── addsticker ──
-    elif cmd == "addsticker":
-        if not message.author.guild_permissions.manage_emojis:
-            await message.channel.send(view=EconomyView("❌ Denied", "You need Manage Emojis permission.", discord.Color.red()))
-            return True
-        if not message.reference:
-            await message.channel.send(view=EconomyView("❌ Usage", "Reply to a sticker message with `.addsticker <name> [description]`", discord.Color.red()))
-            return True
-        ref = await message.channel.fetch_message(message.reference.message_id)
-        if not ref.stickers:
-            await message.channel.send(view=EconomyView("❌ Error", "No sticker found in replied message.", discord.Color.red()))
-            return True
-        sticker = ref.stickers[0]
-        name = args[1] if len(args) > 1 else sticker.name
-        description = " ".join(args[2:]) if len(args) > 2 else "Stolen sticker"
-        try:
-            async with aiohttp.ClientSession() as session:
-                async with session.get(str(sticker.url)) as resp:
-                    sticker_data = await resp.read()
-            file = discord.File(fp=__import__("io").BytesIO(sticker_data), filename=f"{name}.png")
-            await message.guild.create_sticker(name=name, description=description, emoji="⭐", file=file)
-            await message.channel.send(view=EconomyView("✅ Sticker Added", f"Added sticker **{name}** to the server!"))
-        except Exception as e:
-            await message.channel.send(view=EconomyView("❌ Failed", str(e), discord.Color.red()))
-        return True
-
-    return False
-
