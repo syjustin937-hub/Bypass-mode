@@ -6,6 +6,7 @@ import json
 import os
 import re
 import random
+import time
 from datetime import datetime, timezone, timedelta
 from io import BytesIO
 from dotenv import load_dotenv
@@ -269,7 +270,7 @@ class HelpView(discord.ui.LayoutView):
                 discord.ui.TextDisplay("# Help — Commands"),
                 discord.ui.Separator(),
                 discord.ui.TextDisplay(
-                    f"You can use either prefix commands (`.command`) or slash commands (`/command`)"
+                    "You can use either prefix commands (`.command`) or slash commands (`/command`)"
                 ),
                 discord.ui.Separator(),
                 discord.ui.TextDisplay(
@@ -304,6 +305,16 @@ class HelpView(discord.ui.LayoutView):
                 ),
                 discord.ui.Separator(),
                 discord.ui.TextDisplay(
+                    "**Economy Commands**\n"
+                    "`.balance [@user]` `.daily` `.weekly` `.work` `.beg` `.crime`\n"
+                    "`.rob @user` `.fish` `.mine` `.coinflip <bet> <h/t>` `.scatter <bet>`\n"
+                    "`.deposit <amt|all>` `.withdraw <amt|all>` `.give @user <amt>`\n"
+                    "`.shop` `.buy <item> [qty]` `.sell <item> [qty]` `.inventory`\n"
+                    "`.leaderboard`\n"
+                    "Admin: `.addcoins` `.removecoins` `.setcoins` `.resetcoins`"
+                ),
+                discord.ui.Separator(),
+                discord.ui.TextDisplay(
                     "**Utility Commands**\n"
                     "`.ping`\n"
                     "`.say #channel <message>`\n"
@@ -312,12 +323,10 @@ class HelpView(discord.ui.LayoutView):
                     "`.avatar [@user]`\n"
                     "`.bypass <link>`\n"
                     "`.steal <emoji>`\n"
-                    "`.scatter <bet>`\n"
-                    "`.balance`\n"
                     "`.help`"
                 ),
                 discord.ui.Separator(),
-                discord.ui.TextDisplay(f"Prefix: `.` | All commands also available as `/command`"),
+                discord.ui.TextDisplay("Prefix: `.` | All commands also available as `/command`"),
                 accent_color=discord.Color.blurple()
             )
         )
@@ -810,6 +819,62 @@ SCATTER_SYMBOLS = ["🍒", "🍋", "🔔", "💎", "7️⃣"]
 SCATTER_WEIGHTS = [30, 25, 20, 15, 10]
 SCATTER_PAYOUT = {"🍒": 3, "🍋": 4, "🔔": 6, "💎": 10, "7️⃣": 25}
 STARTING_COINS = 1000
+COIN = "🪙"
+
+SHOP = {
+    "padlock": {"name": "Padlock", "emoji": "🔒", "price": 1500, "desc": "Blocks the next robbery against you (single use)."},
+    "clover": {"name": "Lucky Clover", "emoji": "🍀", "price": 2000, "desc": "+15% success on your next crime/rob (single use)."},
+    "laptop": {"name": "Laptop", "emoji": "💻", "price": 8000, "desc": "+50% earnings from work (permanent)."},
+    "fishing_rod": {"name": "Fishing Rod", "emoji": "🎣", "price": 2500, "desc": "Lets you use fish (permanent)."},
+    "pickaxe": {"name": "Pickaxe", "emoji": "⛏️", "price": 3500, "desc": "Lets you use mine (permanent)."},
+}
+PERMANENT = {"laptop", "fishing_rod", "pickaxe"}
+
+COOLDOWNS = {
+    "daily": 86400,
+    "weekly": 604800,
+    "work": 1800,
+    "beg": 60,
+    "crime": 900,
+    "rob": 1800,
+    "fish": 120,
+    "mine": 180,
+}
+
+JOBS = [
+    ("coded a Discord bot", 200, 450),
+    ("delivered food around the city", 150, 350),
+    ("fixed someone's PC", 250, 500),
+    ("streamed on Twitch", 100, 600),
+    ("did freelance design work", 200, 400),
+    ("tutored a student online", 180, 380),
+]
+
+BEG_PEOPLE = ["Mang Tomas", "Aling Nena", "a kind stranger", "a jeepney driver", "a random tourist"]
+
+FISH_TABLE = [
+    ("an old boot", 0, 20, 25),
+    ("a Tilapia", 80, 180, 35),
+    ("a Bangus", 150, 300, 22),
+    ("a Tuna", 300, 600, 12),
+    ("a treasure chest", 1000, 2000, 6),
+]
+
+ORE_TABLE = [
+    ("some plain rocks", 0, 30, 30),
+    ("Coal", 80, 200, 30),
+    ("Iron", 200, 400, 22),
+    ("Gold", 500, 900, 12),
+    ("a Diamond", 1500, 2500, 6),
+]
+
+ECO_ALIASES = {
+    "bal": "balance", "dep": "deposit", "with": "withdraw", "pay": "give",
+    "lb": "leaderboard", "top": "leaderboard", "inv": "inventory",
+    "cf": "coinflip", "flip": "coinflip",
+}
+
+MENTION_RE = re.compile(r"<@!?\d+>")
 
 
 def get_balance(uid: int) -> int:
@@ -847,6 +912,507 @@ def scatter_result(uid: int, bet: int) -> discord.ui.LayoutView:
         f"**Balance:** {new_balance}"
     )
     return InfoView(title, body, color)
+
+
+def err(msg: str) -> discord.ui.LayoutView:
+    return InfoView("Failed!", msg, discord.Color.red())
+
+
+def ok(title: str, body: str) -> discord.ui.LayoutView:
+    return InfoView(title, body, discord.Color.green())
+
+
+def fmt_time(s: int) -> str:
+    d, r = divmod(int(s), 86400)
+    h, r = divmod(r, 3600)
+    m, sec = divmod(r, 60)
+    parts = []
+    if d:
+        parts.append(f"{d}d")
+    if h:
+        parts.append(f"{h}h")
+    if m:
+        parts.append(f"{m}m")
+    if sec or not parts:
+        parts.append(f"{sec}s")
+    return " ".join(parts)
+
+
+def parse_amount(s: str, maximum: int):
+    s = s.lower().replace(",", "").strip()
+    if s == "all":
+        return maximum
+    if s == "half":
+        return maximum // 2
+    m = re.fullmatch(r"(\d+(?:\.\d+)?)([km]?)", s)
+    if not m:
+        return None
+    mult = {"": 1, "k": 1000, "m": 1000000}[m.group(2)]
+    return int(float(m.group(1)) * mult)
+
+
+def wallet(uid) -> int:
+    return config.get("coins", {}).get(str(uid), STARTING_COINS)
+
+
+def bank(uid) -> int:
+    return config.get("bank", {}).get(str(uid), 0)
+
+
+def set_wallet(uid, amt):
+    config.setdefault("coins", {})[str(uid)] = max(0, int(amt))
+
+
+def set_bank(uid, amt):
+    config.setdefault("bank", {})[str(uid)] = max(0, int(amt))
+
+
+def inv(uid) -> dict:
+    return config.setdefault("inventory", {}).setdefault(str(uid), {})
+
+
+def has_item(uid, item) -> bool:
+    return inv(uid).get(item, 0) > 0
+
+
+def add_item(uid, item, n=1):
+    d = inv(uid)
+    d[item] = d.get(item, 0) + n
+
+
+def take_item(uid, item, n=1):
+    d = inv(uid)
+    d[item] = d.get(item, 0) - n
+    if d[item] <= 0:
+        d.pop(item, None)
+
+
+def cooldown_left(uid, name) -> int:
+    last = config.get("cooldowns", {}).get(str(uid), {}).get(name, 0)
+    return max(0, int(last + COOLDOWNS[name] - time.time()))
+
+
+def start_cooldown(uid, name):
+    config.setdefault("cooldowns", {}).setdefault(str(uid), {})[name] = time.time()
+
+
+def cd_view(name, left):
+    ready = int(time.time()) + left
+    return InfoView(
+        "Slow down!",
+        f"`{name}` is on cooldown. Try again <t:{ready}:R> (**{fmt_time(left)}**).",
+        discord.Color.orange()
+    )
+
+
+def transfer(from_id, to_id, amt):
+    set_wallet(from_id, wallet(from_id) - amt)
+    set_wallet(to_id, wallet(to_id) + amt)
+
+
+def balance_view(member):
+    w, b = wallet(member.id), bank(member.id)
+    return InfoView(
+        f"💰 {member.display_name}'s Balance",
+        f"**Wallet:** {w:,} {COIN}\n**Bank:** {b:,} {COIN}\n**Net Worth:** {w + b:,} {COIN}"
+    )
+
+
+def daily_view(user):
+    left = cooldown_left(user.id, "daily")
+    if left:
+        return cd_view("daily", left)
+    now = int(time.time())
+    st = config.setdefault("streaks", {}).get(str(user.id), {"count": 0, "last": 0})
+    st["count"] = st["count"] + 1 if now - st["last"] <= 172800 else 1
+    st["last"] = now
+    config["streaks"][str(user.id)] = st
+    reward = 500 + min(st["count"], 30) * 50
+    set_wallet(user.id, wallet(user.id) + reward)
+    start_cooldown(user.id, "daily")
+    save_config(config)
+    return ok(
+        "🎁 Daily Reward",
+        f"You received **{reward:,}** {COIN}\n**Streak:** {st['count']} day(s) 🔥\n**Wallet:** {wallet(user.id):,} {COIN}"
+    )
+
+
+def weekly_view(user):
+    left = cooldown_left(user.id, "weekly")
+    if left:
+        return cd_view("weekly", left)
+    reward = 5000
+    set_wallet(user.id, wallet(user.id) + reward)
+    start_cooldown(user.id, "weekly")
+    save_config(config)
+    return ok("📅 Weekly Reward", f"You received **{reward:,}** {COIN}\n**Wallet:** {wallet(user.id):,} {COIN}")
+
+
+def work_view(user):
+    left = cooldown_left(user.id, "work")
+    if left:
+        return cd_view("work", left)
+    job, lo, hi = random.choice(JOBS)
+    pay = random.randint(lo, hi)
+    bonus = ""
+    if has_item(user.id, "laptop"):
+        pay = int(pay * 1.5)
+        bonus = "\n💻 Laptop bonus: +50%"
+    set_wallet(user.id, wallet(user.id) + pay)
+    start_cooldown(user.id, "work")
+    save_config(config)
+    return ok("💼 Work", f"You {job} and earned **{pay:,}** {COIN}{bonus}")
+
+
+def beg_view(user):
+    left = cooldown_left(user.id, "beg")
+    if left:
+        return cd_view("beg", left)
+    start_cooldown(user.id, "beg")
+    who = random.choice(BEG_PEOPLE)
+    if random.random() < 0.65:
+        amt = random.randint(20, 120)
+        set_wallet(user.id, wallet(user.id) + amt)
+        save_config(config)
+        return ok("🙏 Beg", f"{who} gave you **{amt:,}** {COIN}")
+    save_config(config)
+    return InfoView("🙏 Beg", f"{who} ignored you. Nothing this time.", discord.Color.orange())
+
+
+def crime_view(user):
+    left = cooldown_left(user.id, "crime")
+    if left:
+        return cd_view("crime", left)
+    chance = 0.50
+    note = ""
+    if has_item(user.id, "clover"):
+        take_item(user.id, "clover")
+        chance += 0.15
+        note = "\n🍀 Lucky Clover used (+15%)"
+    start_cooldown(user.id, "crime")
+    if random.random() < chance:
+        amt = random.randint(300, 900)
+        set_wallet(user.id, wallet(user.id) + amt)
+        save_config(config)
+        return ok("🦹 Crime — SUCCESS", f"You pulled it off and got **{amt:,}** {COIN}{note}")
+    fine = min(wallet(user.id), random.randint(150, 500))
+    set_wallet(user.id, wallet(user.id) - fine)
+    save_config(config)
+    return InfoView("🚔 Crime — CAUGHT", f"You got caught and paid a fine of **{fine:,}** {COIN}{note}", discord.Color.red())
+
+
+def rob_view(robber, victim):
+    if victim.bot or victim.id == robber.id:
+        return err("You can't rob that user.")
+    left = cooldown_left(robber.id, "rob")
+    if left:
+        return cd_view("rob", left)
+    if wallet(robber.id) < 200:
+        return err("You need at least **200** coins in your wallet to attempt a robbery.")
+    if wallet(victim.id) < 200:
+        return err(f"{victim.display_name} doesn't have enough in their wallet to be worth robbing.")
+    start_cooldown(robber.id, "rob")
+    if has_item(victim.id, "padlock"):
+        take_item(victim.id, "padlock")
+        fine = min(wallet(robber.id), 300)
+        transfer(robber.id, victim.id, fine)
+        save_config(config)
+        return InfoView(
+            "🔒 Robbery Blocked",
+            f"{victim.mention} had a Padlock! You paid **{fine:,}** {COIN} in damages.",
+            discord.Color.red()
+        )
+    chance = 0.40
+    note = ""
+    if has_item(robber.id, "clover"):
+        take_item(robber.id, "clover")
+        chance += 0.15
+        note = "\n🍀 Lucky Clover used (+15%)"
+    if random.random() < chance:
+        amt = max(1, int(wallet(victim.id) * random.uniform(0.10, 0.30)))
+        transfer(victim.id, robber.id, amt)
+        save_config(config)
+        return ok("🥷 Robbery — SUCCESS", f"You stole **{amt:,}** {COIN} from {victim.mention}!{note}")
+    fine = max(1, int(wallet(robber.id) * random.uniform(0.10, 0.20)))
+    transfer(robber.id, victim.id, fine)
+    save_config(config)
+    return InfoView(
+        "🚔 Robbery — FAILED",
+        f"You got caught and paid **{fine:,}** {COIN} to {victim.mention}.{note}",
+        discord.Color.red()
+    )
+
+
+def deposit_view(user, raw):
+    amt = parse_amount(raw, wallet(user.id))
+    if amt is None or amt <= 0:
+        return err("Enter a valid amount (number, `all`, `half`, or `5k`).")
+    if amt > wallet(user.id):
+        return err(f"You only have **{wallet(user.id):,}** {COIN} in your wallet.")
+    set_wallet(user.id, wallet(user.id) - amt)
+    set_bank(user.id, bank(user.id) + amt)
+    save_config(config)
+    return ok("🏦 Deposited", f"Deposited **{amt:,}** {COIN}\n**Wallet:** {wallet(user.id):,}\n**Bank:** {bank(user.id):,}")
+
+
+def withdraw_view(user, raw):
+    amt = parse_amount(raw, bank(user.id))
+    if amt is None or amt <= 0:
+        return err("Enter a valid amount (number, `all`, `half`, or `5k`).")
+    if amt > bank(user.id):
+        return err(f"You only have **{bank(user.id):,}** {COIN} in your bank.")
+    set_bank(user.id, bank(user.id) - amt)
+    set_wallet(user.id, wallet(user.id) + amt)
+    save_config(config)
+    return ok("🏦 Withdrawn", f"Withdrew **{amt:,}** {COIN}\n**Wallet:** {wallet(user.id):,}\n**Bank:** {bank(user.id):,}")
+
+
+def give_view(sender, receiver, raw):
+    if receiver.bot or receiver.id == sender.id:
+        return err("You can't give coins to that user.")
+    amt = parse_amount(raw, wallet(sender.id))
+    if amt is None or amt <= 0:
+        return err("Enter a valid amount.")
+    if amt > wallet(sender.id):
+        return err(f"You only have **{wallet(sender.id):,}** {COIN} in your wallet.")
+    transfer(sender.id, receiver.id, amt)
+    save_config(config)
+    return ok("💸 Transfer Complete", f"{sender.mention} gave **{amt:,}** {COIN} to {receiver.mention}")
+
+
+def leaderboard_view(guild):
+    ids = set(config.get("coins", {})) | set(config.get("bank", {}))
+    rows = []
+    for i in ids:
+        if guild and guild.get_member(int(i)) is None:
+            continue
+        rows.append((wallet(i) + bank(i), i))
+    rows.sort(reverse=True)
+    rows = rows[:10]
+    if not rows:
+        return InfoView("🏆 Leaderboard", "No one is on the board yet.")
+    medals = ["🥇", "🥈", "🥉"]
+    lines = []
+    for n, (total, i) in enumerate(rows):
+        rank = medals[n] if n < 3 else f"**{n + 1}.**"
+        lines.append(f"{rank} <@{i}> — **{total:,}** {COIN}")
+    return InfoView("🏆 Richest Members", "\n".join(lines), discord.Color.gold())
+
+
+def shop_view():
+    lines = []
+    for k, v in SHOP.items():
+        lines.append(f"{v['emoji']} **{v['name']}** — {v['price']:,} {COIN}\n{v['desc']}\n`id: {k}`")
+    lines.append("Buy with `.buy <item> [qty]` or `/buy`")
+    return InfoView("🛒 Shop", "\n\n".join(lines), discord.Color.gold())
+
+
+def resolve_item(text):
+    t = text.lower().strip().replace("-", "_").replace(" ", "_")
+    for k, v in SHOP.items():
+        if t == k or t == v["name"].lower().replace(" ", "_"):
+            return k
+    return None
+
+
+def buy_view(user, key, qty):
+    if key not in SHOP:
+        return err("Unknown item. Check `.shop` for the list.")
+    item = SHOP[key]
+    if key in PERMANENT:
+        if has_item(user.id, key):
+            return err(f"You already own a {item['name']}.")
+        qty = 1
+    qty = max(1, min(qty, 100))
+    cost = item["price"] * qty
+    if cost > wallet(user.id):
+        return err(f"You need **{cost:,}** {COIN} but only have **{wallet(user.id):,}** in your wallet.")
+    set_wallet(user.id, wallet(user.id) - cost)
+    add_item(user.id, key, qty)
+    save_config(config)
+    return ok("🛒 Purchase Complete", f"Bought **{qty}× {item['emoji']} {item['name']}** for **{cost:,}** {COIN}")
+
+
+def sell_view(user, key, qty):
+    if key not in SHOP:
+        return err("Unknown item.")
+    item = SHOP[key]
+    qty = max(1, qty)
+    owned = inv(user.id).get(key, 0)
+    if owned < qty:
+        return err(f"You only own **{owned}** of {item['name']}.")
+    gain = (item["price"] // 2) * qty
+    take_item(user.id, key, qty)
+    set_wallet(user.id, wallet(user.id) + gain)
+    save_config(config)
+    return ok("💱 Sold", f"Sold **{qty}× {item['emoji']} {item['name']}** for **{gain:,}** {COIN} (50% value)")
+
+
+def inventory_view(user):
+    items = inv(user.id)
+    if not items:
+        return InfoView(f"🎒 {user.display_name}'s Inventory", "Your inventory is empty. Visit the `.shop`!")
+    lines = [f"{SHOP[k]['emoji']} **{SHOP[k]['name']}** × {n}" for k, n in items.items() if k in SHOP]
+    return InfoView(f"🎒 {user.display_name}'s Inventory", "\n".join(lines) or "Empty.")
+
+
+def weighted_reward(table):
+    name, lo, hi, _ = random.choices(table, weights=[t[3] for t in table], k=1)[0]
+    return name, random.randint(lo, hi)
+
+
+def fish_view(user):
+    if not has_item(user.id, "fishing_rod"):
+        return err("You need a 🎣 Fishing Rod. Buy one with `.buy fishing_rod`.")
+    left = cooldown_left(user.id, "fish")
+    if left:
+        return cd_view("fish", left)
+    name, amt = weighted_reward(FISH_TABLE)
+    set_wallet(user.id, wallet(user.id) + amt)
+    start_cooldown(user.id, "fish")
+    save_config(config)
+    return ok("🎣 Fishing", f"You caught {name} worth **{amt:,}** {COIN}")
+
+
+def mine_view(user):
+    if not has_item(user.id, "pickaxe"):
+        return err("You need a ⛏️ Pickaxe. Buy one with `.buy pickaxe`.")
+    left = cooldown_left(user.id, "mine")
+    if left:
+        return cd_view("mine", left)
+    name, amt = weighted_reward(ORE_TABLE)
+    set_wallet(user.id, wallet(user.id) + amt)
+    start_cooldown(user.id, "mine")
+    save_config(config)
+    return ok("⛏️ Mining", f"You mined {name} worth **{amt:,}** {COIN}")
+
+
+def coinflip_view(user, raw_bet, side):
+    side = {"h": "heads", "head": "heads", "heads": "heads", "t": "tails", "tail": "tails", "tails": "tails"}.get(side.lower())
+    if not side:
+        return err("Pick `heads` or `tails`.")
+    bet = parse_amount(raw_bet, wallet(user.id))
+    if bet is None or bet <= 0:
+        return err("Enter a valid bet.")
+    if bet > wallet(user.id):
+        return err(f"Not enough coins. Wallet: **{wallet(user.id):,}**")
+    result = random.choice(["heads", "tails"])
+    if result == side:
+        set_wallet(user.id, wallet(user.id) + bet)
+        save_config(config)
+        return ok("🪙 Coinflip — WIN", f"It landed on **{result}**! You won **{bet:,}** {COIN}\n**Wallet:** {wallet(user.id):,}")
+    set_wallet(user.id, wallet(user.id) - bet)
+    save_config(config)
+    return InfoView("🪙 Coinflip — LOSE", f"It landed on **{result}**. You lost **{bet:,}** {COIN}\n**Wallet:** {wallet(user.id):,}", discord.Color.red())
+
+
+def eco_admin_view(action, member, amount):
+    uid = member.id
+    if action == "add":
+        set_wallet(uid, wallet(uid) + amount)
+        text = f"Added **{amount:,}** {COIN} to {member.mention}"
+    elif action == "remove":
+        set_wallet(uid, wallet(uid) - amount)
+        text = f"Removed **{amount:,}** {COIN} from {member.mention}"
+    elif action == "set":
+        set_wallet(uid, amount)
+        text = f"Set {member.mention}'s wallet to **{amount:,}** {COIN}"
+    else:
+        set_wallet(uid, STARTING_COINS)
+        set_bank(uid, 0)
+        config.get("inventory", {}).pop(str(uid), None)
+        config.get("cooldowns", {}).pop(str(uid), None)
+        config.get("streaks", {}).pop(str(uid), None)
+        text = f"Reset {member.mention}'s economy data."
+    save_config(config)
+    return ok("🛠️ Economy Admin", text + f"\n**Wallet now:** {wallet(uid):,} {COIN}")
+
+
+SIMPLE_ECONOMY = {
+    "daily": ("Claim your daily reward", lambda u, g: daily_view(u)),
+    "weekly": ("Claim your weekly reward", lambda u, g: weekly_view(u)),
+    "work": ("Work to earn coins", lambda u, g: work_view(u)),
+    "beg": ("Beg for some coins", lambda u, g: beg_view(u)),
+    "crime": ("Commit a crime (risky!)", lambda u, g: crime_view(u)),
+    "fish": ("Go fishing (needs a Fishing Rod)", lambda u, g: fish_view(u)),
+    "mine": ("Go mining (needs a Pickaxe)", lambda u, g: mine_view(u)),
+    "shop": ("View the shop", lambda u, g: shop_view()),
+    "inventory": ("View your inventory", lambda u, g: inventory_view(u)),
+    "leaderboard": ("See the richest members", lambda u, g: leaderboard_view(g)),
+}
+
+
+async def economy_prefix(message, cmd, args) -> bool:
+    cmd = ECO_ALIASES.get(cmd, cmd)
+    author = message.author
+    send = message.channel.send
+    rest = [a for a in args[1:] if not MENTION_RE.fullmatch(a)]
+    target = message.mentions[0] if message.mentions else None
+
+    if cmd in SIMPLE_ECONOMY:
+        await send(view=SIMPLE_ECONOMY[cmd][1](author, message.guild))
+    elif cmd == "balance":
+        await send(view=balance_view(target or author))
+    elif cmd == "rob":
+        if not target:
+            await send(view=err("Usage: `.rob @user`"))
+        else:
+            await send(view=rob_view(author, target))
+    elif cmd == "deposit":
+        if not rest:
+            await send(view=err("Usage: `.deposit <amount|all>`"))
+        else:
+            await send(view=deposit_view(author, rest[0]))
+    elif cmd == "withdraw":
+        if not rest:
+            await send(view=err("Usage: `.withdraw <amount|all>`"))
+        else:
+            await send(view=withdraw_view(author, rest[0]))
+    elif cmd == "give":
+        if not target or not rest:
+            await send(view=err("Usage: `.give @user <amount>`"))
+        else:
+            await send(view=give_view(author, target, rest[0]))
+    elif cmd in ("buy", "sell"):
+        qty = 1
+        name_parts = rest
+        if name_parts and name_parts[-1].isdigit():
+            qty = int(name_parts[-1])
+            name_parts = name_parts[:-1]
+        key = resolve_item(" ".join(name_parts)) if name_parts else None
+        if not key:
+            await send(view=err(f"Usage: `.{cmd} <item> [qty]` — see `.shop` for item names."))
+        elif cmd == "buy":
+            await send(view=buy_view(author, key, qty))
+        else:
+            await send(view=sell_view(author, key, qty))
+    elif cmd == "coinflip":
+        if len(rest) < 2:
+            await send(view=err("Usage: `.coinflip <bet> <heads|tails>`"))
+        else:
+            await send(view=coinflip_view(author, rest[0], rest[1]))
+    elif cmd in ("addcoins", "removecoins", "setcoins", "resetcoins"):
+        if not author.guild_permissions.administrator:
+            return True
+        if not target:
+            usage = f"Usage: `.{cmd} @user`" if cmd == "resetcoins" else f"Usage: `.{cmd} @user <amount>`"
+            await send(view=err(usage))
+            return True
+        action = cmd.replace("coins", "")
+        if action == "reset":
+            await send(view=eco_admin_view("reset", target, 0))
+            return True
+        amount = parse_amount(rest[0], 0) if rest else None
+        if amount is None or amount < 0 or (action != "set" and amount == 0):
+            await send(view=err("Enter a valid amount."))
+        else:
+            await send(view=eco_admin_view(action, target, amount))
+    else:
+        return False
+    return True
+
+
+GUILD_OBJ = discord.Object(id=GUILD_ID)
 
 
 @tree.command(name="help", description="Show all commands", guild=discord.Object(id=GUILD_ID))
@@ -1107,9 +1673,103 @@ async def scatter_cmd(interaction: discord.Interaction, bet: int):
     await interaction.response.send_message(view=scatter_result(interaction.user.id, bet))
 
 
-@tree.command(name="balance", description="Check your coin balance", guild=discord.Object(id=GUILD_ID))
-async def balance_cmd(interaction: discord.Interaction):
-    await interaction.response.send_message(view=InfoView("💰 Balance", f"**Coins:** {get_balance(interaction.user.id)}"))
+def register_simple_economy(name, desc, fn):
+    async def cb(interaction: discord.Interaction):
+        await interaction.response.send_message(view=fn(interaction.user, interaction.guild))
+    tree.command(name=name, description=desc, guild=GUILD_OBJ)(cb)
+
+
+for _name, (_desc, _fn) in SIMPLE_ECONOMY.items():
+    register_simple_economy(_name, _desc, _fn)
+
+ITEM_CHOICES = [discord.app_commands.Choice(name=v["name"], value=k) for k, v in SHOP.items()]
+
+
+@tree.command(name="balance", description="Check your (or someone's) balance", guild=GUILD_OBJ)
+@discord.app_commands.describe(member="Member to check")
+async def balance_cmd(interaction: discord.Interaction, member: discord.Member = None):
+    await interaction.response.send_message(view=balance_view(member or interaction.user))
+
+
+@tree.command(name="rob", description="Try to rob another member's wallet", guild=GUILD_OBJ)
+@discord.app_commands.describe(member="Who to rob")
+async def rob_cmd(interaction: discord.Interaction, member: discord.Member):
+    await interaction.response.send_message(view=rob_view(interaction.user, member))
+
+
+@tree.command(name="deposit", description="Deposit coins into your bank", guild=GUILD_OBJ)
+@discord.app_commands.describe(amount="Amount, or all / half / 5k")
+async def deposit_cmd(interaction: discord.Interaction, amount: str):
+    await interaction.response.send_message(view=deposit_view(interaction.user, amount))
+
+
+@tree.command(name="withdraw", description="Withdraw coins from your bank", guild=GUILD_OBJ)
+@discord.app_commands.describe(amount="Amount, or all / half / 5k")
+async def withdraw_cmd(interaction: discord.Interaction, amount: str):
+    await interaction.response.send_message(view=withdraw_view(interaction.user, amount))
+
+
+@tree.command(name="give", description="Give coins to another member", guild=GUILD_OBJ)
+@discord.app_commands.describe(member="Who to give coins to", amount="Amount, or all / half / 5k")
+async def give_cmd(interaction: discord.Interaction, member: discord.Member, amount: str):
+    await interaction.response.send_message(view=give_view(interaction.user, member, amount))
+
+
+@tree.command(name="buy", description="Buy an item from the shop", guild=GUILD_OBJ)
+@discord.app_commands.describe(item="Item to buy", amount="How many (default 1)")
+@discord.app_commands.choices(item=ITEM_CHOICES)
+async def buy_cmd(interaction: discord.Interaction, item: discord.app_commands.Choice[str], amount: int = 1):
+    await interaction.response.send_message(view=buy_view(interaction.user, item.value, amount))
+
+
+@tree.command(name="sell", description="Sell an item for 50% of its price", guild=GUILD_OBJ)
+@discord.app_commands.describe(item="Item to sell", amount="How many (default 1)")
+@discord.app_commands.choices(item=ITEM_CHOICES)
+async def sell_cmd(interaction: discord.Interaction, item: discord.app_commands.Choice[str], amount: int = 1):
+    await interaction.response.send_message(view=sell_view(interaction.user, item.value, amount))
+
+
+@tree.command(name="coinflip", description="Flip a coin and double your bet", guild=GUILD_OBJ)
+@discord.app_commands.describe(bet="Amount, or all / half / 5k", side="Heads or tails")
+@discord.app_commands.choices(side=[
+    discord.app_commands.Choice(name="Heads", value="heads"),
+    discord.app_commands.Choice(name="Tails", value="tails")
+])
+async def coinflip_cmd(interaction: discord.Interaction, bet: str, side: discord.app_commands.Choice[str]):
+    await interaction.response.send_message(view=coinflip_view(interaction.user, bet, side.value))
+
+
+@tree.command(name="addcoins", description="[Admin] Add coins to a member", guild=GUILD_OBJ)
+@discord.app_commands.default_permissions(administrator=True)
+async def addcoins_cmd(interaction: discord.Interaction, member: discord.Member, amount: int):
+    if amount <= 0:
+        await interaction.response.send_message(view=err("Amount must be positive."), ephemeral=True)
+        return
+    await interaction.response.send_message(view=eco_admin_view("add", member, amount))
+
+
+@tree.command(name="removecoins", description="[Admin] Remove coins from a member", guild=GUILD_OBJ)
+@discord.app_commands.default_permissions(administrator=True)
+async def removecoins_cmd(interaction: discord.Interaction, member: discord.Member, amount: int):
+    if amount <= 0:
+        await interaction.response.send_message(view=err("Amount must be positive."), ephemeral=True)
+        return
+    await interaction.response.send_message(view=eco_admin_view("remove", member, amount))
+
+
+@tree.command(name="setcoins", description="[Admin] Set a member's wallet", guild=GUILD_OBJ)
+@discord.app_commands.default_permissions(administrator=True)
+async def setcoins_cmd(interaction: discord.Interaction, member: discord.Member, amount: int):
+    if amount < 0:
+        await interaction.response.send_message(view=err("Amount can't be negative."), ephemeral=True)
+        return
+    await interaction.response.send_message(view=eco_admin_view("set", member, amount))
+
+
+@tree.command(name="resetcoins", description="[Admin] Reset a member's economy data", guild=GUILD_OBJ)
+@discord.app_commands.default_permissions(administrator=True)
+async def resetcoins_cmd(interaction: discord.Interaction, member: discord.Member):
+    await interaction.response.send_message(view=eco_admin_view("reset", member, 0))
 
 
 verify_group = discord.app_commands.Group(
@@ -1292,6 +1952,9 @@ async def on_message(message):
     if not args:
         return
     cmd = args[0].lower()
+
+    if await economy_prefix(message, cmd, args):
+        return
 
     if cmd == "help":
         await message.channel.send(view=HelpView())
@@ -1625,9 +2288,6 @@ async def on_message(message):
             await message.channel.send(view=FailedView("Usage: `.scatter <bet>`"))
             return
         await message.channel.send(view=scatter_result(message.author.id, int(args[1])))
-
-    elif cmd == "balance":
-        await message.channel.send(view=InfoView("💰 Balance", f"**Coins:** {get_balance(message.author.id)}"))
 
 
 @bot.event
