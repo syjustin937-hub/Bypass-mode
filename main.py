@@ -2460,4 +2460,458 @@ async def on_message(message):
             return
         target = message.channel_mentions[0] if message.channel_mentions else message.channel
         overwrite = target.overwrites_for(message.guild.default_role)
-   
+        overwrite.send_messages = False
+        try:
+            await target.set_permissions(message.guild.default_role, overwrite=overwrite)
+            await message.channel.send(view=LockView(target, True))
+            await log_mod(message.guild, "Lock", message.author, target)
+        except discord.Forbidden:
+            await message.channel.send(view=FailedView("I don't have permission to lock that channel."))
+        except Exception as e:
+            await message.channel.send(view=FailedView(str(e)))
+
+    elif cmd == "unlock":
+        if not message.author.guild_permissions.manage_channels:
+            return
+        target = message.channel_mentions[0] if message.channel_mentions else message.channel
+        overwrite = target.overwrites_for(message.guild.default_role)
+        overwrite.send_messages = True
+        try:
+            await target.set_permissions(message.guild.default_role, overwrite=overwrite)
+            await message.channel.send(view=LockView(target, False))
+            await log_mod(message.guild, "Unlock", message.author, target)
+        except discord.Forbidden:
+            await message.channel.send(view=FailedView("I don't have permission to unlock that channel."))
+        except Exception as e:
+            await message.channel.send(view=FailedView(str(e)))
+
+    elif cmd == "afk":
+        reason = " ".join(args[1:]) if len(args) > 1 else "AFK"
+        if "afk" not in config:
+            config["afk"] = {}
+        config["afk"][str(message.author.id)] = {
+            "reason": reason,
+            "timestamp": int(datetime.now(timezone.utc).timestamp())
+        }
+        save_config(config)
+        await message.channel.send(view=AfkSetView(message.author, reason))
+
+    elif cmd == "snipe":
+        data = last_deleted.get(message.channel.id)
+        if not data:
+            await message.channel.send(view=SnipeEmptyView())
+        else:
+            await message.channel.send(view=SnipeView(data))
+
+    elif cmd == "avatar":
+        member = message.mentions[0] if message.mentions else message.author
+        embed = discord.Embed(title=f"{member.display_name}'s Avatar", color=discord.Color.blurple())
+        embed.set_image(url=str(member.display_avatar.url))
+        await message.channel.send(embed=embed)
+
+    elif cmd == "gstart":
+        if not message.author.guild_permissions.administrator:
+            return
+        if len(args) < 4:
+            await message.channel.send(view=FailedView("Usage: `.gstart <duration> <winners> <prize>`"))
+            return
+        duration_str = args[1]
+        try:
+            winner_count = int(args[2])
+        except ValueError:
+            await message.channel.send(view=FailedView("Winners must be a number."))
+            return
+        prize = " ".join(args[3:])
+        seconds = parse_duration(duration_str)
+        if seconds <= 0:
+            await message.channel.send(view=FailedView("Invalid duration. Example: `1h`, `30m`, `2d`"))
+            return
+        end_ts = int((datetime.now(timezone.utc) + timedelta(seconds=seconds)).timestamp())
+        msg = await message.channel.send(view=GiveawayActiveView(prize, winner_count, end_ts, 0))
+        if "giveaways" not in config:
+            config["giveaways"] = {}
+        config["giveaways"][str(msg.id)] = {
+            "channel_id": message.channel.id,
+            "prize": prize,
+            "winner_count": winner_count,
+            "end_timestamp": end_ts,
+            "entries": [],
+            "ended": False,
+            "winners": []
+        }
+        save_config(config)
+        await log_bot(
+            message.guild,
+            "🎉 Giveaway Started",
+            f"**By:** {fmt_ref(message.author)}\n**Channel:** {message.channel.mention}\n**Prize:** {prize}\n**Winners:** {winner_count}\n**Ends:** <t:{end_ts}:R>",
+            discord.Color.gold()
+        )
+
+    elif cmd == "gend":
+        if not message.author.guild_permissions.administrator:
+            return
+        if len(args) < 2:
+            await message.channel.send(view=FailedView("Usage: `.gend <message_id>`"))
+            return
+        msg_id = args[1]
+        giveaways = config.get("giveaways", {})
+        if msg_id not in giveaways:
+            await message.channel.send(view=FailedView("Giveaway not found."))
+            return
+        gw = giveaways[msg_id]
+        if gw.get("ended"):
+            await message.channel.send(view=FailedView("Giveaway already ended."))
+            return
+        await end_giveaway(msg_id, gw)
+
+    elif cmd == "greroll":
+        if not message.author.guild_permissions.administrator:
+            return
+        if len(args) < 2:
+            await message.channel.send(view=FailedView("Usage: `.greroll <message_id>`"))
+            return
+        msg_id = args[1]
+        giveaways = config.get("giveaways", {})
+        if msg_id not in giveaways:
+            await message.channel.send(view=FailedView("Giveaway not found."))
+            return
+        gw = giveaways[msg_id]
+        if not gw.get("ended"):
+            await message.channel.send(view=FailedView("Giveaway hasn't ended yet."))
+            return
+        entries = gw["entries"]
+        if not entries:
+            await message.channel.send(view=FailedView("No entries to reroll from."))
+            return
+        picked = random.sample(entries, min(gw["winner_count"], len(entries)))
+        gw["winners"] = picked
+        save_config(config)
+        channel = bot.get_channel(gw["channel_id"])
+        winner_text = " ".join(f"<@{uid}>" for uid in picked)
+        if channel:
+            try:
+                original = await channel.fetch_message(int(msg_id))
+                await channel.send(f"🎉 Giveaway rerolled! **{gw['prize']}**\nNew winner(s): {winner_text}", reference=original)
+            except Exception:
+                pass
+        await message.channel.send(view=GiveawayRerollView(picked))
+        await log_bot(
+            message.guild,
+            "🎉 Giveaway Rerolled",
+            f"**By:** {fmt_ref(message.author)}\n**Prize:** {gw['prize']}\n**New winner(s):** {winner_text}",
+            discord.Color.gold()
+        )
+
+    elif cmd == "steal":
+        if not message.author.guild_permissions.manage_emojis_and_stickers:
+            return
+        text = " ".join(args[1:])
+        if not text and message.reference:
+            text = getattr(message.reference.resolved, "content", "")
+        await message.channel.send(view=await steal_emoji(message.guild, text, f"Stolen by {message.author}"))
+
+    elif cmd == "scatter":
+        if len(args) < 2 or not args[1].isdigit():
+            await message.channel.send(view=FailedView("Usage: `.scatter <bet>`"))
+            return
+        await message.channel.send(view=scatter_result(message.author.id, int(args[1])))
+
+
+@bot.event
+async def on_message_edit(before, after):
+    if after.author.bot or not after.guild or before.content == after.content:
+        return
+    body = (
+        f"**Author:** {fmt_ref(after.author)}\n"
+        f"**Channel:** {after.channel.mention}\n"
+        f"**Jump:** [Go to message]({after.jump_url})\n\n"
+        f"**Before**\n{quote(before.content or '(empty)', 800)}\n\n"
+        f"**After**\n{quote(after.content or '(empty)', 800)}"
+    )
+    await send_log(after.guild, "message", LogView("✏️ Message Edited", body, discord.Color.orange()))
+
+
+@bot.event
+async def on_raw_bulk_message_delete(payload):
+    if not payload.guild_id:
+        return
+    if consume_action("purge", payload.channel_id):
+        return
+    guild = bot.get_guild(payload.guild_id)
+    if guild is None:
+        return
+    body = f"**Channel:** <#{payload.channel_id}>\n**Messages:** {len(payload.message_ids)}"
+    await send_log(guild, "message", LogView("🧹 Bulk Delete", body, discord.Color.red()))
+
+
+@bot.event
+async def on_member_join(member):
+    if member.guild.id != GUILD_ID:
+        return
+    age = (discord.utils.utcnow() - member.created_at).days
+    body = (
+        f"**User:** {fmt_ref(member)}\n"
+        f"**Account Created:** <t:{int(member.created_at.timestamp())}:R>\n"
+        f"**Account Age:** {age} day(s)\n"
+        f"**Member Count:** {member.guild.member_count}"
+    )
+    if age < 7:
+        body += "\n⚠️ **New account**"
+    await send_log(member.guild, "member", LogView("📥 Member Joined", body, discord.Color.green()))
+
+
+@bot.event
+async def on_member_remove(member):
+    guild = member.guild
+    if guild.id != GUILD_ID:
+        return
+    if peek_action("ban", member.id):
+        return
+    if consume_action("kick", member.id):
+        return
+    if await find_audit(guild, discord.AuditLogAction.ban, member.id, within=10):
+        return
+    kick_entry = await find_audit(guild, discord.AuditLogAction.kick, member.id, within=10)
+    if kick_entry:
+        await log_mod(guild, "Kick", kick_entry.user, member, kick_entry.reason)
+        return
+    roles = [r.mention for r in member.roles if r != guild.default_role]
+    body = f"**User:** {fmt_ref(member)}\n**Member Count:** {guild.member_count}"
+    if member.joined_at:
+        body += f"\n**Joined:** <t:{int(member.joined_at.timestamp())}:R>"
+    if roles:
+        body += f"\n**Roles:** {clip(' '.join(roles), 700)}"
+    await send_log(guild, "member", LogView("📤 Member Left", body, discord.Color.red()))
+
+
+@bot.event
+async def on_member_ban(guild, user):
+    if guild.id != GUILD_ID:
+        return
+    if consume_action("ban", user.id):
+        return
+    entry = await find_audit(guild, discord.AuditLogAction.ban, user.id)
+    await log_mod(guild, "Ban", entry.user if entry else None, user, entry.reason if entry else None)
+
+
+@bot.event
+async def on_member_unban(guild, user):
+    if guild.id != GUILD_ID:
+        return
+    if consume_action("unban", user.id):
+        return
+    entry = await find_audit(guild, discord.AuditLogAction.unban, user.id)
+    await log_mod(guild, "Unban", entry.user if entry else None, user, entry.reason if entry else None)
+
+
+@bot.event
+async def on_member_update(before, after):
+    guild = after.guild
+    if guild.id != GUILD_ID:
+        return
+    if before.nick != after.nick:
+        entry = await find_audit(guild, discord.AuditLogAction.member_update, after.id)
+        body = (
+            f"**Member:** {fmt_ref(after)}\n"
+            f"**Before:** {before.nick or '*none*'}\n"
+            f"**After:** {after.nick or '*none*'}"
+        )
+        if entry and entry.user and entry.user.id != after.id:
+            body += f"\n**Changed by:** {fmt_ref(entry.user)}"
+        await send_log(guild, "member", LogView("✏️ Nickname Changed", body, discord.Color.blurple()))
+    added = [r for r in after.roles if r not in before.roles]
+    removed = [r for r in before.roles if r not in after.roles]
+    if added or removed:
+        entry = await find_audit(guild, discord.AuditLogAction.member_role_update, after.id)
+        body = f"**Member:** {fmt_ref(after)}"
+        if added:
+            body += f"\n**Added:** {' '.join(r.mention for r in added)}"
+        if removed:
+            body += f"\n**Removed:** {' '.join(r.mention for r in removed)}"
+        if entry and entry.user:
+            body += f"\n**By:** {fmt_ref(entry.user)}"
+        color = discord.Color.green() if added and not removed else discord.Color.orange()
+        await send_log(guild, "member", LogView("🎭 Roles Updated", body, color))
+    if before.timed_out_until != after.timed_out_until:
+        kind = "Timeout" if after.timed_out_until else "Untimeout"
+        if not consume_action(kind.lower(), after.id):
+            entry = await find_audit(guild, discord.AuditLogAction.member_update, after.id)
+            extra = None
+            if after.timed_out_until:
+                extra = f"**Until:** <t:{int(after.timed_out_until.timestamp())}:F>"
+            await log_mod(guild, kind, entry.user if entry else None, after, entry.reason if entry else None, extra)
+
+
+@bot.event
+async def on_voice_state_update(member, before, after):
+    if member.guild.id != GUILD_ID or member.bot:
+        return
+    if before.channel == after.channel:
+        return
+    if before.channel is None:
+        title, color = "🔊 Voice Join", discord.Color.green()
+        body = f"{fmt_ref(member)} joined {after.channel.mention}"
+    elif after.channel is None:
+        title, color = "🔇 Voice Leave", discord.Color.red()
+        body = f"{fmt_ref(member)} left {before.channel.mention}"
+    else:
+        title, color = "🔀 Voice Move", discord.Color.blurple()
+        body = f"{fmt_ref(member)} moved from {before.channel.mention} to {after.channel.mention}"
+    await send_log(member.guild, "voice", LogView(title, body, color))
+
+
+@bot.event
+async def on_guild_channel_create(channel):
+    if channel.guild.id != GUILD_ID:
+        return
+    entry = await find_audit(channel.guild, discord.AuditLogAction.channel_create, channel.id)
+    body = f"**Channel:** {channel.mention} (`{channel.id}`)\n**Type:** {str(channel.type).replace('_', ' ').title()}"
+    if entry and entry.user:
+        body += f"\n**Created by:** {fmt_ref(entry.user)}"
+    await send_log(channel.guild, "server", LogView("➕ Channel Created", body, discord.Color.green()))
+
+
+@bot.event
+async def on_guild_channel_delete(channel):
+    if channel.guild.id != GUILD_ID:
+        return
+    entry = await find_audit(channel.guild, discord.AuditLogAction.channel_delete, channel.id)
+    body = f"**Channel:** #{channel.name} (`{channel.id}`)\n**Type:** {str(channel.type).replace('_', ' ').title()}"
+    if entry and entry.user:
+        body += f"\n**Deleted by:** {fmt_ref(entry.user)}"
+    await send_log(channel.guild, "server", LogView("➖ Channel Deleted", body, discord.Color.red()))
+
+
+@bot.event
+async def on_guild_channel_update(before, after):
+    if after.guild.id != GUILD_ID:
+        return
+    changes = []
+    if before.name != after.name:
+        changes.append(f"**Name:** `{before.name}` → `{after.name}`")
+    old_topic = getattr(before, "topic", None)
+    new_topic = getattr(after, "topic", None)
+    if old_topic != new_topic:
+        changes.append(f"**Topic:** {clip(old_topic or 'none', 200)} → {clip(new_topic or 'none', 200)}")
+    if before.category != after.category:
+        old_cat = before.category.name if before.category else "none"
+        new_cat = after.category.name if after.category else "none"
+        changes.append(f"**Category:** {old_cat} → {new_cat}")
+    if getattr(before, "nsfw", None) != getattr(after, "nsfw", None):
+        changes.append(f"**NSFW:** {getattr(before, 'nsfw', None)} → {getattr(after, 'nsfw', None)}")
+    if not changes:
+        return
+    entry = await find_audit(after.guild, discord.AuditLogAction.channel_update, after.id)
+    body = f"**Channel:** {after.mention} (`{after.id}`)\n" + "\n".join(changes)
+    if entry and entry.user:
+        body += f"\n**By:** {fmt_ref(entry.user)}"
+    await send_log(after.guild, "server", LogView("🛠️ Channel Updated", body, discord.Color.orange()))
+
+
+@bot.event
+async def on_guild_role_create(role):
+    if role.guild.id != GUILD_ID:
+        return
+    entry = await find_audit(role.guild, discord.AuditLogAction.role_create, role.id)
+    body = f"**Role:** {role.mention} (`{role.id}`)"
+    if entry and entry.user:
+        body += f"\n**Created by:** {fmt_ref(entry.user)}"
+    await send_log(role.guild, "server", LogView("➕ Role Created", body, discord.Color.green()))
+
+
+@bot.event
+async def on_guild_role_delete(role):
+    if role.guild.id != GUILD_ID:
+        return
+    entry = await find_audit(role.guild, discord.AuditLogAction.role_delete, role.id)
+    body = f"**Role:** {role.name} (`{role.id}`)"
+    if entry and entry.user:
+        body += f"\n**Deleted by:** {fmt_ref(entry.user)}"
+    await send_log(role.guild, "server", LogView("➖ Role Deleted", body, discord.Color.red()))
+
+
+@bot.event
+async def on_guild_role_update(before, after):
+    if after.guild.id != GUILD_ID:
+        return
+    changes = []
+    if before.name != after.name:
+        changes.append(f"**Name:** `{before.name}` → `{after.name}`")
+    if before.color != after.color:
+        changes.append(f"**Color:** `{before.color}` → `{after.color}`")
+    if before.hoist != after.hoist:
+        changes.append(f"**Hoisted:** {before.hoist} → {after.hoist}")
+    if before.mentionable != after.mentionable:
+        changes.append(f"**Mentionable:** {before.mentionable} → {after.mentionable}")
+    if before.permissions != after.permissions:
+        gained = [n.replace("_", " ") for n, v in after.permissions if v and not getattr(before.permissions, n)]
+        lost = [n.replace("_", " ") for n, v in before.permissions if v and not getattr(after.permissions, n)]
+        if gained:
+            changes.append(f"**Permissions Added:** {clip(', '.join(gained), 400)}")
+        if lost:
+            changes.append(f"**Permissions Removed:** {clip(', '.join(lost), 400)}")
+    if not changes:
+        return
+    entry = await find_audit(after.guild, discord.AuditLogAction.role_update, after.id)
+    body = f"**Role:** {after.mention} (`{after.id}`)\n" + "\n".join(changes)
+    if entry and entry.user:
+        body += f"\n**By:** {fmt_ref(entry.user)}"
+    await send_log(after.guild, "server", LogView("🛠️ Role Updated", body, discord.Color.orange()))
+
+
+@bot.event
+async def on_guild_update(before, after):
+    if after.id != GUILD_ID:
+        return
+    changes = []
+    if before.name != after.name:
+        changes.append(f"**Name:** `{before.name}` → `{after.name}`")
+    if before.icon != after.icon:
+        changes.append("**Icon:** changed")
+    if before.owner_id != after.owner_id:
+        changes.append(f"**Owner:** <@{before.owner_id}> → <@{after.owner_id}>")
+    if before.verification_level != after.verification_level:
+        changes.append(f"**Verification:** {before.verification_level} → {after.verification_level}")
+    if not changes:
+        return
+    entry = await find_audit(after, discord.AuditLogAction.guild_update, after.id)
+    body = "\n".join(changes)
+    if entry and entry.user:
+        body += f"\n**By:** {fmt_ref(entry.user)}"
+    await send_log(after, "server", LogView("🏠 Server Updated", body, discord.Color.orange()))
+
+
+@bot.event
+async def on_invite_create(invite):
+    guild = bot.get_guild(invite.guild.id) if invite.guild else None
+    if guild is None:
+        return
+    body = f"**Code:** `{invite.code}`\n**Channel:** {invite.channel.mention}"
+    if invite.inviter:
+        body += f"\n**Created by:** {fmt_ref(invite.inviter)}"
+    body += f"\n**Max Uses:** {invite.max_uses or 'Unlimited'}"
+    body += f"\n**Expires:** {'Never' if not invite.max_age else f'in {invite.max_age // 3600}h'}"
+    await send_log(guild, "server", LogView("🔗 Invite Created", body, discord.Color.green()))
+
+
+@bot.event
+async def on_invite_delete(invite):
+    guild = bot.get_guild(invite.guild.id) if invite.guild else None
+    if guild is None:
+        return
+    body = f"**Code:** `{invite.code}`\n**Channel:** {invite.channel.mention if invite.channel else 'Unknown'}"
+    await send_log(guild, "server", LogView("🔗 Invite Deleted", body, discord.Color.red()))
+
+
+@bot.event
+async def on_ready():
+    bot.add_view(VerifyView())
+    bot.add_view(GiveawayPersistentView())
+    asyncio.create_task(giveaway_loop())
+    await tree.sync(guild=discord.Object(id=GUILD_ID))
+    print(f"Logged in as {bot.user}")
+    print(f"Reference images loaded: {len(reference_hashes)}")
+
+
+bot.run(TOKEN)
+
