@@ -135,6 +135,12 @@ async def end_giveaway(msg_id: str, gw: dict):
         f"🎉 Giveaway ended! **{gw['prize']}**\nWinner(s): {winner_text}",
         reference=message
     )
+    await log_bot(
+        channel.guild,
+        "🎉 Giveaway Ended",
+        f"**Prize:** {gw['prize']}\n**Channel:** {channel.mention}\n**Entries:** {len(entries)}\n**Winner(s):** {winner_text}",
+        discord.Color.gold()
+    )
 
 
 async def giveaway_loop():
@@ -312,6 +318,12 @@ class HelpView(discord.ui.LayoutView):
                     "`.shop` `.buy <item> [qty]` `.sell <item> [qty]` `.inventory`\n"
                     "`.leaderboard`\n"
                     "Admin: `.addcoins` `.removecoins` `.setcoins` `.resetcoins`"
+                ),
+                discord.ui.Separator(),
+                discord.ui.TextDisplay(
+                    "**Log Commands (Admin)**\n"
+                    "`.logs` `.setlog <category|all> #channel` `.dellog <category|all>`\n"
+                    "Categories: `mod` `message` `member` `voice` `server` `bot`"
                 ),
                 discord.ui.Separator(),
                 discord.ui.TextDisplay(
@@ -1306,7 +1318,7 @@ def coinflip_view(user, raw_bet, side):
     return InfoView("🪙 Coinflip — LOSE", f"It landed on **{result}**. You lost **{bet:,}** {COIN}\n**Wallet:** {wallet(user.id):,}", discord.Color.red())
 
 
-def eco_admin_view(action, member, amount):
+def eco_admin_view(action, member, amount, moderator=None):
     uid = member.id
     if action == "add":
         set_wallet(uid, wallet(uid) + amount)
@@ -1325,6 +1337,13 @@ def eco_admin_view(action, member, amount):
         config.get("streaks", {}).pop(str(uid), None)
         text = f"Reset {member.mention}'s economy data."
     save_config(config)
+    if moderator is not None and getattr(member, "guild", None) is not None:
+        asyncio.create_task(log_bot(
+            member.guild,
+            "🛠️ Economy Admin",
+            f"**Moderator:** {fmt_ref(moderator)}\n**Target:** {fmt_ref(member)}\n{text}",
+            discord.Color.orange()
+        ))
     return ok("🛠️ Economy Admin", text + f"\n**Wallet now:** {wallet(uid):,} {COIN}")
 
 
@@ -1400,15 +1419,217 @@ async def economy_prefix(message, cmd, args) -> bool:
             return True
         action = cmd.replace("coins", "")
         if action == "reset":
-            await send(view=eco_admin_view("reset", target, 0))
+            await send(view=eco_admin_view("reset", target, 0, author))
             return True
         amount = parse_amount(rest[0], 0) if rest else None
         if amount is None or amount < 0 or (action != "set" and amount == 0):
             await send(view=err("Enter a valid amount."))
         else:
-            await send(view=eco_admin_view(action, target, amount))
+            await send(view=eco_admin_view(action, target, amount, author))
     else:
         return False
+    return True
+
+
+LOG_CATEGORIES = {
+    "mod": "🛡️ Moderation",
+    "message": "💬 Messages",
+    "member": "👤 Members",
+    "voice": "🔊 Voice",
+    "server": "🏠 Server",
+    "bot": "🤖 Bot & Economy",
+}
+
+ACTION_STYLE = {
+    "Kick": ("👢", discord.Color.orange()),
+    "Ban": ("🔨", discord.Color.red()),
+    "Unban": ("🔓", discord.Color.green()),
+    "Timeout": ("⏳", discord.Color.yellow()),
+    "Untimeout": ("⌛", discord.Color.green()),
+    "Warn": ("⚠️", discord.Color.yellow()),
+    "Clear Warns": ("🧹", discord.Color.green()),
+    "Purge": ("🗑️", discord.Color.blurple()),
+    "Lock": ("🔒", discord.Color.red()),
+    "Unlock": ("🔓", discord.Color.green()),
+    "Slowmode": ("🐢", discord.Color.blurple()),
+    "Auto Kick": ("🤖", discord.Color.red()),
+}
+
+recent_actions = {}
+NO_MENTIONS = discord.AllowedMentions.none()
+CHANNEL_MENTION_RE = re.compile(r"<#\d+>")
+
+
+class LogView(discord.ui.LayoutView):
+    def __init__(self, title: str, body: str, color: discord.Color = discord.Color.blurple()):
+        super().__init__(timeout=None)
+        ts = int(time.time())
+        self.add_item(
+            discord.ui.Container(
+                discord.ui.TextDisplay(f"# {title}"),
+                discord.ui.Separator(),
+                discord.ui.TextDisplay(body),
+                discord.ui.Separator(),
+                discord.ui.TextDisplay(f"-# <t:{ts}:F> • <t:{ts}:R>"),
+                accent_color=color
+            )
+        )
+
+
+def clip(text, limit=900) -> str:
+    text = text or ""
+    return text if len(text) <= limit else text[:limit - 1] + "…"
+
+
+def quote(text, limit=900) -> str:
+    lines = clip(text, limit).splitlines()
+    return "\n".join("> " + line for line in lines) if lines else "> "
+
+
+def fmt_ref(obj) -> str:
+    if obj is None:
+        return "Unknown"
+    mention = getattr(obj, "mention", None) or getattr(obj, "name", "Unknown")
+    return f"{mention} (`{obj.id}`)"
+
+
+def mark_action(kind: str, target_id: int):
+    now = time.time()
+    for key in [k for k, t in recent_actions.items() if now - t > 60]:
+        recent_actions.pop(key, None)
+    recent_actions[(kind, target_id)] = now
+
+
+def peek_action(kind: str, target_id: int) -> bool:
+    t = recent_actions.get((kind, target_id))
+    return t is not None and time.time() - t < 20
+
+
+def consume_action(kind: str, target_id: int) -> bool:
+    t = recent_actions.pop((kind, target_id), None)
+    return t is not None and time.time() - t < 20
+
+
+async def find_audit(guild, action, target_id, within=15):
+    try:
+        async for entry in guild.audit_logs(limit=8, action=action):
+            target = entry.target
+            if target is not None and getattr(target, "id", None) == target_id:
+                if (discord.utils.utcnow() - entry.created_at).total_seconds() <= within:
+                    return entry
+    except Exception:
+        pass
+    return None
+
+
+async def send_log(guild, category: str, view: discord.ui.LayoutView):
+    if guild is None or guild.id != GUILD_ID:
+        return
+    channel_id = config.get("log_channels", {}).get(category)
+    if not channel_id:
+        return
+    channel = guild.get_channel(channel_id)
+    if channel is None:
+        return
+    try:
+        await channel.send(view=view, allowed_mentions=NO_MENTIONS)
+    except Exception as e:
+        print(f"Log send failed ({category}): {e}")
+
+
+async def log_mod(guild, action: str, moderator, target=None, reason=None, extra=None):
+    icon, color = ACTION_STYLE.get(action, ("🛡️", discord.Color.blurple()))
+    lines = [f"**Moderator:** {fmt_ref(moderator)}"]
+    if target is not None:
+        lines.append(f"**Target:** {fmt_ref(target)}")
+    if reason:
+        lines.append(f"**Reason:** {clip(reason, 500)}")
+    if extra:
+        lines.append(extra)
+    await send_log(guild, "mod", LogView(f"{icon} {action}", "\n".join(lines), color))
+
+
+async def log_bot(guild, title: str, body: str, color: discord.Color = discord.Color.blurple()):
+    await send_log(guild, "bot", LogView(title, body, color))
+
+
+async def log_message_delete(message):
+    body = (
+        f"**Author:** {fmt_ref(message.author)}\n"
+        f"**Channel:** {message.channel.mention}\n"
+        f"**Sent:** <t:{int(message.created_at.timestamp())}:R>"
+    )
+    if message.content:
+        body += f"\n\n**Content**\n{quote(message.content, 1000)}"
+    if message.attachments:
+        files = "\n".join(f"• {a.filename}" for a in message.attachments[:10])
+        body += f"\n\n**Attachments**\n{clip(files, 500)}"
+    await send_log(message.guild, "message", LogView("🗑️ Message Deleted", body, discord.Color.red()))
+
+
+def logs_status_view(guild) -> discord.ui.LayoutView:
+    cfg = config.get("log_channels", {})
+    lines = []
+    for key, label in LOG_CATEGORIES.items():
+        cid = cfg.get(key)
+        ch = guild.get_channel(cid) if cid else None
+        lines.append(f"{label} (`{key}`) — {ch.mention if ch else '`Off`'}")
+    lines.append("\nSet with `/logs set` or `.setlog <category|all> #channel`")
+    return InfoView("📋 Log Channels", "\n".join(lines))
+
+
+async def apply_log_channel(category: str, channel) -> discord.ui.LayoutView:
+    if category != "all" and category not in LOG_CATEGORIES:
+        keys = ", ".join(f"`{k}`" for k in LOG_CATEGORIES)
+        return err(f"Unknown category. Use: {keys}, `all`")
+    label = "all" if category == "all" else LOG_CATEGORIES[category]
+    try:
+        await channel.send(
+            view=LogView("✅ Log Channel Set", f"This channel will now receive **{label}** logs.", discord.Color.green()),
+            allowed_mentions=NO_MENTIONS
+        )
+    except Exception:
+        return err(f"I can't send messages in {channel.mention}.")
+    targets = list(LOG_CATEGORIES) if category == "all" else [category]
+    cfg = config.setdefault("log_channels", {})
+    for key in targets:
+        cfg[key] = channel.id
+    save_config(config)
+    return ok("📋 Log Channel Updated", f"**{label}** logs → {channel.mention}")
+
+
+def disable_log_channel(category: str) -> discord.ui.LayoutView:
+    if category != "all" and category not in LOG_CATEGORIES:
+        keys = ", ".join(f"`{k}`" for k in LOG_CATEGORIES)
+        return err(f"Unknown category. Use: {keys}, `all`")
+    targets = list(LOG_CATEGORIES) if category == "all" else [category]
+    cfg = config.setdefault("log_channels", {})
+    for key in targets:
+        cfg.pop(key, None)
+    save_config(config)
+    label = "all" if category == "all" else LOG_CATEGORIES[category]
+    return ok("📋 Logging Disabled", f"**{label}** logs are now off.")
+
+
+async def logs_prefix(message, cmd, args) -> bool:
+    if cmd not in ("logs", "setlog", "dellog"):
+        return False
+    if not message.author.guild_permissions.administrator:
+        return True
+    send = message.channel.send
+    category = next((a.lower() for a in args[1:] if not CHANNEL_MENTION_RE.fullmatch(a)), None)
+    if cmd == "logs":
+        await send(view=logs_status_view(message.guild))
+    elif cmd == "setlog":
+        if not category or not message.channel_mentions:
+            await send(view=err("Usage: `.setlog <category|all> #channel`"))
+        else:
+            await send(view=await apply_log_channel(category, message.channel_mentions[0]))
+    else:
+        if not category:
+            await send(view=err("Usage: `.dellog <category|all>`"))
+        else:
+            await send(view=disable_log_channel(category))
     return True
 
 
@@ -1460,8 +1681,10 @@ async def say(interaction: discord.Interaction, channel: discord.TextChannel, me
 @discord.app_commands.default_permissions(kick_members=True)
 async def kick(interaction: discord.Interaction, member: discord.Member, reason: str = "No reason provided"):
     try:
+        mark_action("kick", member.id)
         await member.kick(reason=reason)
         await interaction.response.send_message(view=KickResultView(member, reason))
+        await log_mod(interaction.guild, "Kick", interaction.user, member, reason)
     except discord.Forbidden:
         await interaction.response.send_message(view=FailedView("I don't have permission to kick that member."), ephemeral=True)
     except Exception as e:
@@ -1474,8 +1697,10 @@ async def kick(interaction: discord.Interaction, member: discord.Member, reason:
 async def ban(interaction: discord.Interaction, member: discord.Member, reason: str = "No reason provided", delete_days: int = 0):
     delete_days = max(0, min(7, delete_days))
     try:
+        mark_action("ban", member.id)
         await member.ban(reason=reason, delete_message_days=delete_days)
         await interaction.response.send_message(view=BanResultView(member, reason))
+        await log_mod(interaction.guild, "Ban", interaction.user, member, reason, f"**Message History Deleted:** {delete_days} day(s)")
     except discord.Forbidden:
         await interaction.response.send_message(view=FailedView("I don't have permission to ban that member."), ephemeral=True)
     except Exception as e:
@@ -1489,8 +1714,10 @@ async def unban(interaction: discord.Interaction, user_id: str):
     try:
         uid = int(user_id)
         user = await bot.fetch_user(uid)
+        mark_action("unban", uid)
         await interaction.guild.unban(user)
         await interaction.response.send_message(view=UnbanResultView(uid))
+        await log_mod(interaction.guild, "Unban", interaction.user, user)
     except discord.NotFound:
         await interaction.response.send_message(view=FailedView("User not found or not banned."), ephemeral=True)
     except ValueError:
@@ -1506,8 +1733,10 @@ async def purge(interaction: discord.Interaction, amount: int):
     amount = max(1, min(100, amount))
     try:
         await interaction.response.defer(ephemeral=True)
+        mark_action("purge", interaction.channel.id)
         deleted = await interaction.channel.purge(limit=amount)
         msg = await interaction.followup.send(view=PurgeResultView(len(deleted), interaction.channel), ephemeral=False)
+        await log_mod(interaction.guild, "Purge", interaction.user, interaction.channel, extra=f"**Deleted:** {len(deleted)} message(s)")
         asyncio.create_task(delete_after(msg, 5))
     except discord.Forbidden:
         await interaction.followup.send(view=FailedView("I don't have permission to delete messages here."), ephemeral=True)
@@ -1522,8 +1751,10 @@ async def timeout_cmd(interaction: discord.Interaction, member: discord.Member, 
     minutes = max(1, min(40320, minutes))
     try:
         until = datetime.now(timezone.utc) + timedelta(minutes=minutes)
+        mark_action("timeout", member.id)
         await member.timeout(until, reason=reason)
         await interaction.response.send_message(view=TimeoutResultView(member, minutes, reason))
+        await log_mod(interaction.guild, "Timeout", interaction.user, member, reason, f"**Duration:** {minutes} minute(s)\n**Until:** <t:{int(until.timestamp())}:F>")
     except discord.Forbidden:
         await interaction.response.send_message(view=FailedView("I don't have permission to timeout that member."), ephemeral=True)
     except Exception as e:
@@ -1535,8 +1766,10 @@ async def timeout_cmd(interaction: discord.Interaction, member: discord.Member, 
 @discord.app_commands.default_permissions(moderate_members=True)
 async def untimeout(interaction: discord.Interaction, member: discord.Member):
     try:
+        mark_action("untimeout", member.id)
         await member.timeout(None)
         await interaction.response.send_message(view=UntimeoutResultView(member))
+        await log_mod(interaction.guild, "Untimeout", interaction.user, member)
     except discord.Forbidden:
         await interaction.response.send_message(view=FailedView("I don't have permission to remove that timeout."), ephemeral=True)
     except Exception as e:
@@ -1560,6 +1793,7 @@ async def warn(interaction: discord.Interaction, member: discord.Member, reason:
     save_config(config)
     total = len(config["warns"][uid])
     await interaction.response.send_message(view=WarnAddedView(member, reason, total))
+    await log_mod(interaction.guild, "Warn", interaction.user, member, reason, f"**Total Warns:** {total}")
 
 
 @tree.command(name="warns", description="View warnings for a member", guild=discord.Object(id=GUILD_ID))
@@ -1578,6 +1812,7 @@ async def clearwarns(interaction: discord.Interaction, member: discord.Member):
         config["warns"][str(member.id)] = []
         save_config(config)
     await interaction.response.send_message(view=WarnsCleared(member))
+    await log_mod(interaction.guild, "Clear Warns", interaction.user, member)
 
 
 @tree.command(name="slowmode", description="Set slowmode in a channel", guild=discord.Object(id=GUILD_ID))
@@ -1589,6 +1824,7 @@ async def slowmode(interaction: discord.Interaction, seconds: int, channel: disc
     try:
         await target.edit(slowmode_delay=seconds)
         await interaction.response.send_message(view=SlowmodeView(target, seconds))
+        await log_mod(interaction.guild, "Slowmode", interaction.user, target, extra=f"**Delay:** {seconds}s")
     except discord.Forbidden:
         await interaction.response.send_message(view=FailedView("I don't have permission to edit that channel."), ephemeral=True)
     except Exception as e:
@@ -1605,6 +1841,7 @@ async def lock(interaction: discord.Interaction, channel: discord.TextChannel = 
     try:
         await target.set_permissions(interaction.guild.default_role, overwrite=overwrite)
         await interaction.response.send_message(view=LockView(target, True))
+        await log_mod(interaction.guild, "Lock", interaction.user, target)
     except discord.Forbidden:
         await interaction.response.send_message(view=FailedView("I don't have permission to lock that channel."), ephemeral=True)
     except Exception as e:
@@ -1621,6 +1858,7 @@ async def unlock(interaction: discord.Interaction, channel: discord.TextChannel 
     try:
         await target.set_permissions(interaction.guild.default_role, overwrite=overwrite)
         await interaction.response.send_message(view=LockView(target, False))
+        await log_mod(interaction.guild, "Unlock", interaction.user, target)
     except discord.Forbidden:
         await interaction.response.send_message(view=FailedView("I don't have permission to unlock that channel."), ephemeral=True)
     except Exception as e:
@@ -1745,7 +1983,7 @@ async def addcoins_cmd(interaction: discord.Interaction, member: discord.Member,
     if amount <= 0:
         await interaction.response.send_message(view=err("Amount must be positive."), ephemeral=True)
         return
-    await interaction.response.send_message(view=eco_admin_view("add", member, amount))
+    await interaction.response.send_message(view=eco_admin_view("add", member, amount, interaction.user))
 
 
 @tree.command(name="removecoins", description="[Admin] Remove coins from a member", guild=GUILD_OBJ)
@@ -1754,7 +1992,7 @@ async def removecoins_cmd(interaction: discord.Interaction, member: discord.Memb
     if amount <= 0:
         await interaction.response.send_message(view=err("Amount must be positive."), ephemeral=True)
         return
-    await interaction.response.send_message(view=eco_admin_view("remove", member, amount))
+    await interaction.response.send_message(view=eco_admin_view("remove", member, amount, interaction.user))
 
 
 @tree.command(name="setcoins", description="[Admin] Set a member's wallet", guild=GUILD_OBJ)
@@ -1763,13 +2001,13 @@ async def setcoins_cmd(interaction: discord.Interaction, member: discord.Member,
     if amount < 0:
         await interaction.response.send_message(view=err("Amount can't be negative."), ephemeral=True)
         return
-    await interaction.response.send_message(view=eco_admin_view("set", member, amount))
+    await interaction.response.send_message(view=eco_admin_view("set", member, amount, interaction.user))
 
 
 @tree.command(name="resetcoins", description="[Admin] Reset a member's economy data", guild=GUILD_OBJ)
 @discord.app_commands.default_permissions(administrator=True)
 async def resetcoins_cmd(interaction: discord.Interaction, member: discord.Member):
-    await interaction.response.send_message(view=eco_admin_view("reset", member, 0))
+    await interaction.response.send_message(view=eco_admin_view("reset", member, 0, interaction.user))
 
 
 verify_group = discord.app_commands.Group(
@@ -1829,6 +2067,12 @@ async def giveaway_start(interaction: discord.Interaction, channel: discord.Text
     }
     save_config(config)
     await interaction.response.send_message(view=GiveawayStartedView(channel, prize, end_ts), ephemeral=True)
+    await log_bot(
+        interaction.guild,
+        "🎉 Giveaway Started",
+        f"**By:** {fmt_ref(interaction.user)}\n**Channel:** {channel.mention}\n**Prize:** {prize}\n**Winners:** {winners}\n**Ends:** <t:{end_ts}:R>",
+        discord.Color.gold()
+    )
 
 
 @giveaway_group.command(name="end", description="Force end a giveaway early")
@@ -1874,9 +2118,56 @@ async def giveaway_reroll(interaction: discord.Interaction, message_id: str):
         except Exception:
             pass
     await interaction.response.send_message(view=GiveawayRerollView(picked), ephemeral=True)
+    await log_bot(
+        interaction.guild,
+        "🎉 Giveaway Rerolled",
+        f"**By:** {fmt_ref(interaction.user)}\n**Prize:** {gw['prize']}\n**New winner(s):** {winner_text}",
+        discord.Color.gold()
+    )
 
 
 tree.add_command(giveaway_group)
+
+logs_group = discord.app_commands.Group(
+    name="logs",
+    description="Log system commands",
+    guild_ids=[GUILD_ID],
+    default_permissions=discord.Permissions(administrator=True)
+)
+
+LOG_CATEGORY_CHOICES = [discord.app_commands.Choice(name=label, value=key) for key, label in LOG_CATEGORIES.items()]
+
+
+@logs_group.command(name="set", description="Set the channel for a log category")
+@discord.app_commands.describe(category="Which logs to send", channel="Channel that receives the logs")
+@discord.app_commands.choices(category=LOG_CATEGORY_CHOICES)
+async def logs_set(interaction: discord.Interaction, category: discord.app_commands.Choice[str], channel: discord.TextChannel):
+    await interaction.response.defer(ephemeral=True)
+    view = await apply_log_channel(category.value, channel)
+    await interaction.followup.send(view=view, ephemeral=True)
+
+
+@logs_group.command(name="all", description="Send every log category to one channel")
+@discord.app_commands.describe(channel="Channel that receives all logs")
+async def logs_all(interaction: discord.Interaction, channel: discord.TextChannel):
+    await interaction.response.defer(ephemeral=True)
+    view = await apply_log_channel("all", channel)
+    await interaction.followup.send(view=view, ephemeral=True)
+
+
+@logs_group.command(name="disable", description="Turn off a log category")
+@discord.app_commands.describe(category="Which logs to turn off")
+@discord.app_commands.choices(category=LOG_CATEGORY_CHOICES + [discord.app_commands.Choice(name="All", value="all")])
+async def logs_disable(interaction: discord.Interaction, category: discord.app_commands.Choice[str]):
+    await interaction.response.send_message(view=disable_log_channel(category.value), ephemeral=True)
+
+
+@logs_group.command(name="status", description="Show where each log category is sent")
+async def logs_status(interaction: discord.Interaction):
+    await interaction.response.send_message(view=logs_status_view(interaction.guild), ephemeral=True)
+
+
+tree.add_command(logs_group)
 
 
 @bot.event
@@ -1890,6 +2181,8 @@ async def on_message_delete(message):
             "author_id": message.author.id,
             "timestamp": int(message.created_at.timestamp())
         }
+    if message.guild and not message.content.lower().startswith(f"{PREFIX}purge"):
+        await log_message_delete(message)
 
 
 @bot.event
@@ -1924,7 +2217,9 @@ async def on_message(message):
             if await check_scam_image(attachment):
                 await message.delete()
                 try:
+                    mark_action("kick", message.author.id)
                     await message.author.kick(reason="MrBeast scam auto detected")
+                    await log_mod(message.guild, "Auto Kick", bot.user, message.author, "MrBeast scam auto detected", f"**Channel:** {message.channel.mention}")
                 except Exception as e:
                     print(f"Kick failed: {e}")
                 sent = await message.channel.send(view=UserKickedView(message.author))
@@ -1952,6 +2247,9 @@ async def on_message(message):
     if not args:
         return
     cmd = args[0].lower()
+
+    if await logs_prefix(message, cmd, args):
+        return
 
     if await economy_prefix(message, cmd, args):
         return
@@ -1996,8 +2294,10 @@ async def on_message(message):
         member = message.mentions[0]
         reason = " ".join(args[2:]) if len(args) > 2 else "No reason provided"
         try:
+            mark_action("kick", member.id)
             await member.kick(reason=reason)
             await message.channel.send(view=KickResultView(member, reason))
+            await log_mod(message.guild, "Kick", message.author, member, reason)
         except discord.Forbidden:
             await message.channel.send(view=FailedView("I don't have permission to kick that member."))
         except Exception as e:
@@ -2012,8 +2312,10 @@ async def on_message(message):
         member = message.mentions[0]
         reason = " ".join(args[2:]) if len(args) > 2 else "No reason provided"
         try:
+            mark_action("ban", member.id)
             await member.ban(reason=reason, delete_message_days=0)
             await message.channel.send(view=BanResultView(member, reason))
+            await log_mod(message.guild, "Ban", message.author, member, reason)
         except discord.Forbidden:
             await message.channel.send(view=FailedView("I don't have permission to ban that member."))
         except Exception as e:
@@ -2028,8 +2330,10 @@ async def on_message(message):
         try:
             uid = int(args[1])
             user = await bot.fetch_user(uid)
+            mark_action("unban", uid)
             await message.guild.unban(user)
             await message.channel.send(view=UnbanResultView(uid))
+            await log_mod(message.guild, "Unban", message.author, user)
         except discord.NotFound:
             await message.channel.send(view=FailedView("User not found or not banned."))
         except ValueError:
@@ -2046,8 +2350,10 @@ async def on_message(message):
         try:
             amount = max(1, min(100, int(args[1])))
             await message.delete()
+            mark_action("purge", message.channel.id)
             deleted = await message.channel.purge(limit=amount)
             msg = await message.channel.send(view=PurgeResultView(len(deleted), message.channel))
+            await log_mod(message.guild, "Purge", message.author, message.channel, extra=f"**Deleted:** {len(deleted)} message(s)")
             asyncio.create_task(delete_after(msg, 5))
         except Exception as e:
             await message.channel.send(view=FailedView(str(e)))
@@ -2063,8 +2369,10 @@ async def on_message(message):
             minutes = max(1, min(40320, int(args[2])))
             reason = " ".join(args[3:]) if len(args) > 3 else "No reason provided"
             until = datetime.now(timezone.utc) + timedelta(minutes=minutes)
+            mark_action("timeout", member.id)
             await member.timeout(until, reason=reason)
             await message.channel.send(view=TimeoutResultView(member, minutes, reason))
+            await log_mod(message.guild, "Timeout", message.author, member, reason, f"**Duration:** {minutes} minute(s)\n**Until:** <t:{int(until.timestamp())}:F>")
         except discord.Forbidden:
             await message.channel.send(view=FailedView("I don't have permission to timeout that member."))
         except Exception as e:
@@ -2078,8 +2386,10 @@ async def on_message(message):
             return
         member = message.mentions[0]
         try:
+            mark_action("untimeout", member.id)
             await member.timeout(None)
             await message.channel.send(view=UntimeoutResultView(member))
+            await log_mod(message.guild, "Untimeout", message.author, member)
         except discord.Forbidden:
             await message.channel.send(view=FailedView("I don't have permission to remove that timeout."))
         except Exception as e:
@@ -2106,6 +2416,7 @@ async def on_message(message):
         save_config(config)
         total = len(config["warns"][uid])
         await message.channel.send(view=WarnAddedView(member, reason, total))
+        await log_mod(message.guild, "Warn", message.author, member, reason, f"**Total Warns:** {total}")
 
     elif cmd == "warns":
         if not message.author.guild_permissions.moderate_members:
@@ -2125,6 +2436,7 @@ async def on_message(message):
             config["warns"][str(member.id)] = []
             save_config(config)
         await message.channel.send(view=WarnsCleared(member))
+        await log_mod(message.guild, "Clear Warns", message.author, member)
 
     elif cmd == "slowmode":
         if not message.author.guild_permissions.manage_channels:
@@ -2137,6 +2449,7 @@ async def on_message(message):
             seconds = max(0, min(21600, int(args[1])))
             await target.edit(slowmode_delay=seconds)
             await message.channel.send(view=SlowmodeView(target, seconds))
+            await log_mod(message.guild, "Slowmode", message.author, target, extra=f"**Delay:** {seconds}s")
         except discord.Forbidden:
             await message.channel.send(view=FailedView("I don't have permission to edit that channel."))
         except Exception as e:
@@ -2147,157 +2460,4 @@ async def on_message(message):
             return
         target = message.channel_mentions[0] if message.channel_mentions else message.channel
         overwrite = target.overwrites_for(message.guild.default_role)
-        overwrite.send_messages = False
-        try:
-            await target.set_permissions(message.guild.default_role, overwrite=overwrite)
-            await message.channel.send(view=LockView(target, True))
-        except discord.Forbidden:
-            await message.channel.send(view=FailedView("I don't have permission to lock that channel."))
-        except Exception as e:
-            await message.channel.send(view=FailedView(str(e)))
-
-    elif cmd == "unlock":
-        if not message.author.guild_permissions.manage_channels:
-            return
-        target = message.channel_mentions[0] if message.channel_mentions else message.channel
-        overwrite = target.overwrites_for(message.guild.default_role)
-        overwrite.send_messages = True
-        try:
-            await target.set_permissions(message.guild.default_role, overwrite=overwrite)
-            await message.channel.send(view=LockView(target, False))
-        except discord.Forbidden:
-            await message.channel.send(view=FailedView("I don't have permission to unlock that channel."))
-        except Exception as e:
-            await message.channel.send(view=FailedView(str(e)))
-
-    elif cmd == "afk":
-        reason = " ".join(args[1:]) if len(args) > 1 else "AFK"
-        if "afk" not in config:
-            config["afk"] = {}
-        config["afk"][str(message.author.id)] = {
-            "reason": reason,
-            "timestamp": int(datetime.now(timezone.utc).timestamp())
-        }
-        save_config(config)
-        await message.channel.send(view=AfkSetView(message.author, reason))
-
-    elif cmd == "snipe":
-        data = last_deleted.get(message.channel.id)
-        if not data:
-            await message.channel.send(view=SnipeEmptyView())
-        else:
-            await message.channel.send(view=SnipeView(data))
-
-    elif cmd == "avatar":
-        member = message.mentions[0] if message.mentions else message.author
-        embed = discord.Embed(title=f"{member.display_name}'s Avatar", color=discord.Color.blurple())
-        embed.set_image(url=str(member.display_avatar.url))
-        await message.channel.send(embed=embed)
-
-    elif cmd == "gstart":
-        if not message.author.guild_permissions.administrator:
-            return
-        if len(args) < 4:
-            await message.channel.send(view=FailedView("Usage: `.gstart <duration> <winners> <prize>`"))
-            return
-        duration_str = args[1]
-        try:
-            winner_count = int(args[2])
-        except ValueError:
-            await message.channel.send(view=FailedView("Winners must be a number."))
-            return
-        prize = " ".join(args[3:])
-        seconds = parse_duration(duration_str)
-        if seconds <= 0:
-            await message.channel.send(view=FailedView("Invalid duration. Example: `1h`, `30m`, `2d`"))
-            return
-        end_ts = int((datetime.now(timezone.utc) + timedelta(seconds=seconds)).timestamp())
-        msg = await message.channel.send(view=GiveawayActiveView(prize, winner_count, end_ts, 0))
-        if "giveaways" not in config:
-            config["giveaways"] = {}
-        config["giveaways"][str(msg.id)] = {
-            "channel_id": message.channel.id,
-            "prize": prize,
-            "winner_count": winner_count,
-            "end_timestamp": end_ts,
-            "entries": [],
-            "ended": False,
-            "winners": []
-        }
-        save_config(config)
-
-    elif cmd == "gend":
-        if not message.author.guild_permissions.administrator:
-            return
-        if len(args) < 2:
-            await message.channel.send(view=FailedView("Usage: `.gend <message_id>`"))
-            return
-        msg_id = args[1]
-        giveaways = config.get("giveaways", {})
-        if msg_id not in giveaways:
-            await message.channel.send(view=FailedView("Giveaway not found."))
-            return
-        gw = giveaways[msg_id]
-        if gw.get("ended"):
-            await message.channel.send(view=FailedView("Giveaway already ended."))
-            return
-        await end_giveaway(msg_id, gw)
-
-    elif cmd == "greroll":
-        if not message.author.guild_permissions.administrator:
-            return
-        if len(args) < 2:
-            await message.channel.send(view=FailedView("Usage: `.greroll <message_id>`"))
-            return
-        msg_id = args[1]
-        giveaways = config.get("giveaways", {})
-        if msg_id not in giveaways:
-            await message.channel.send(view=FailedView("Giveaway not found."))
-            return
-        gw = giveaways[msg_id]
-        if not gw.get("ended"):
-            await message.channel.send(view=FailedView("Giveaway hasn't ended yet."))
-            return
-        entries = gw["entries"]
-        if not entries:
-            await message.channel.send(view=FailedView("No entries to reroll from."))
-            return
-        picked = random.sample(entries, min(gw["winner_count"], len(entries)))
-        gw["winners"] = picked
-        save_config(config)
-        channel = bot.get_channel(gw["channel_id"])
-        winner_text = " ".join(f"<@{uid}>" for uid in picked)
-        if channel:
-            try:
-                original = await channel.fetch_message(int(msg_id))
-                await channel.send(f"🎉 Giveaway rerolled! **{gw['prize']}**\nNew winner(s): {winner_text}", reference=original)
-            except Exception:
-                pass
-        await message.channel.send(view=GiveawayRerollView(picked))
-
-    elif cmd == "steal":
-        if not message.author.guild_permissions.manage_emojis_and_stickers:
-            return
-        text = " ".join(args[1:])
-        if not text and message.reference:
-            text = getattr(message.reference.resolved, "content", "")
-        await message.channel.send(view=await steal_emoji(message.guild, text, f"Stolen by {message.author}"))
-
-    elif cmd == "scatter":
-        if len(args) < 2 or not args[1].isdigit():
-            await message.channel.send(view=FailedView("Usage: `.scatter <bet>`"))
-            return
-        await message.channel.send(view=scatter_result(message.author.id, int(args[1])))
-
-
-@bot.event
-async def on_ready():
-    bot.add_view(VerifyView())
-    bot.add_view(GiveawayPersistentView())
-    asyncio.create_task(giveaway_loop())
-    await tree.sync(guild=discord.Object(id=GUILD_ID))
-    print(f"Logged in as {bot.user}")
-    print(f"Reference images loaded: {len(reference_hashes)}")
-
-
-bot.run(TOKEN)
+   
