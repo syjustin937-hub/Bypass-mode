@@ -7,6 +7,7 @@ import os
 import re
 import random
 import time
+from collections import deque, Counter
 from datetime import datetime, timezone, timedelta
 from io import BytesIO
 from dotenv import load_dotenv
@@ -321,9 +322,18 @@ class HelpView(discord.ui.LayoutView):
                 ),
                 discord.ui.Separator(),
                 discord.ui.TextDisplay(
+                    "**Security Commands (Admin)**\n"
+                    "`.security` `.security setup [#logchannel]` `.panic <on|off>`\n"
+                    "`.lockdown` `.unlockdown`\n"
+                    "`.antiraid` `.antinuke` `.antispam` `.antilink` `.antimention` `<on|off>`\n"
+                    "`.whitelist <add|remove|list> [@user]` (owner only)\n"
+                    "Fine-tune with `/security <module>`"
+                ),
+                discord.ui.Separator(),
+                discord.ui.TextDisplay(
                     "**Log Commands (Admin)**\n"
                     "`.logs` `.setlog <category|all> #channel` `.dellog <category|all>`\n"
-                    "Categories: `mod` `message` `member` `voice` `server` `bot`"
+                    "Categories: `mod` `message` `member` `voice` `server` `bot` `security`"
                 ),
                 discord.ui.Separator(),
                 discord.ui.TextDisplay(
@@ -1438,6 +1448,7 @@ LOG_CATEGORIES = {
     "voice": "🔊 Voice",
     "server": "🏠 Server",
     "bot": "🤖 Bot & Economy",
+    "security": "🚨 Security",
 }
 
 ACTION_STYLE = {
@@ -1631,6 +1642,709 @@ async def logs_prefix(message, cmd, args) -> bool:
         else:
             await send(view=disable_log_channel(category))
     return True
+
+
+SEC_DEFAULTS = {
+    "antiraid": {"enabled": False, "threshold": 5, "window": 10, "duration": 300, "action": "kick", "min_age_days": 0, "panic": False},
+    "antinuke": {"enabled": False, "limit": 3, "member_limit": 5, "window": 30, "action": "strip", "recover": True, "guard_perms": True},
+    "antispam": {"enabled": False, "messages": 6, "window": 5, "timeout_minutes": 10},
+    "antilink": {"enabled": False, "invites": True, "links": False, "timeout_minutes": 0},
+    "antimention": {"enabled": False, "limit": 5, "timeout_minutes": 10},
+}
+
+SEC_LABELS = {
+    "antiraid": ("🚧", "Anti-Raid"),
+    "antinuke": ("☢️", "Anti-Nuke"),
+    "antispam": ("💬", "Anti-Spam"),
+    "antilink": ("🔗", "Anti-Link"),
+    "antimention": ("📣", "Anti-Mass-Mention"),
+}
+
+SEC_RANGES = {
+    "threshold": (2, 50),
+    "window": (2, 300),
+    "duration": (30, 3600),
+    "min_age_days": (0, 365),
+    "limit": (1, 20),
+    "member_limit": (1, 50),
+    "messages": (3, 30),
+    "timeout_minutes": (0, 40320),
+}
+
+MODULE_PERMS = {
+    "antiraid": {"kick_members": "Kick Members", "ban_members": "Ban Members", "moderate_members": "Timeout Members"},
+    "antinuke": {"view_audit_log": "View Audit Log", "ban_members": "Ban Members", "kick_members": "Kick Members",
+                 "manage_roles": "Manage Roles", "manage_channels": "Manage Channels", "manage_webhooks": "Manage Webhooks"},
+    "antispam": {"manage_messages": "Manage Messages", "moderate_members": "Timeout Members"},
+    "antilink": {"manage_messages": "Manage Messages"},
+    "antimention": {"manage_messages": "Manage Messages", "moderate_members": "Timeout Members"},
+}
+
+DANGEROUS_PERMS = ("administrator", "manage_guild", "manage_roles", "manage_channels", "ban_members", "kick_members", "manage_webhooks")
+
+NUKE_GROUPS = {
+    "channel_create": "structure", "channel_delete": "structure",
+    "role_create": "structure", "role_delete": "structure",
+    "webhook_create": "structure", "ban": "members", "kick": "members",
+}
+
+NUKE_LABELS = {
+    "channel_create": "channel(s) created", "channel_delete": "channel(s) deleted",
+    "role_create": "role(s) created", "role_delete": "role(s) deleted",
+    "webhook_create": "webhook(s) created", "ban": "member(s) banned", "kick": "member(s) kicked",
+}
+
+INVITE_RE = re.compile(r"(?:discord\.gg|discord(?:app)?\.com/invite|dsc\.gg)/[\w-]+", re.I)
+LINK_RE = re.compile(r"https?://\S+|www\.\S+", re.I)
+
+raid_state = {"joins": deque(), "active_until": 0.0, "count": 0}
+spam_tracker = {}
+nuke_records = {}
+nuke_punished = {}
+seen_audit = set()
+
+
+def sec_cfg(name: str) -> dict:
+    store = config.setdefault("security", {})
+    cfg = store.setdefault(name, {})
+    for key, value in SEC_DEFAULTS[name].items():
+        cfg.setdefault(key, value)
+    return cfg
+
+
+def whitelist_ids() -> list:
+    return config.setdefault("security", {}).setdefault("whitelist", [])
+
+
+def is_trusted(guild, user_id: int) -> bool:
+    if bot.user is not None and user_id == bot.user.id:
+        return True
+    if user_id == guild.owner_id:
+        return True
+    return user_id in whitelist_ids()
+
+
+def clamp(value: int, low: int, high: int) -> int:
+    return max(low, min(high, value))
+
+
+def missing_perms(guild, perms: dict) -> str:
+    me = guild.me.guild_permissions if guild.me else None
+    if me is None:
+        return ""
+    missing = [label for attr, label in perms.items() if not getattr(me, attr)]
+    if not missing:
+        return ""
+    return "\n⚠️ Bot is missing: " + ", ".join(missing)
+
+
+def describe_module(name: str) -> str:
+    cfg = sec_cfg(name)
+    if name == "antiraid":
+        text = f"{cfg['threshold']} joins in {cfg['window']}s → raid mode for {fmt_time(cfg['duration'])}, action: **{cfg['action']}**"
+        if cfg["min_age_days"]:
+            text += f"\nAccounts younger than **{cfg['min_age_days']}** day(s) are actioned"
+        if cfg["panic"]:
+            text += "\n🚨 **Panic mode is ON**"
+        return text
+    if name == "antinuke":
+        return (
+            f"Limit: **{cfg['limit']}** channel/role/webhook actions or **{cfg['member_limit']}** bans/kicks per {cfg['window']}s\n"
+            f"Punishment: **{cfg['action']}** • Recovery: **{'on' if cfg['recover'] else 'off'}** • "
+            f"Permission guard: **{'on' if cfg['guard_perms'] else 'off'}**"
+        )
+    if name == "antispam":
+        return f"{cfg['messages']} messages in {cfg['window']}s → timeout **{cfg['timeout_minutes']}** minute(s)"
+    if name == "antilink":
+        return f"Invites: **{'blocked' if cfg['invites'] else 'allowed'}** • Links: **{'blocked' if cfg['links'] else 'allowed'}**"
+    return f"{cfg['limit']}+ mentions in one message → timeout **{cfg['timeout_minutes']}** minute(s)"
+
+
+def security_status_view(guild) -> discord.ui.LayoutView:
+    lines = []
+    for name, (emoji, label) in SEC_LABELS.items():
+        cfg = sec_cfg(name)
+        state = "✅ On" if cfg["enabled"] else "❌ Off"
+        lines.append(f"{emoji} **{label}** — {state}\n{describe_module(name)}")
+    ids = whitelist_ids()
+    wl = " ".join(f"<@{i}>" for i in ids) if ids else "none"
+    lines.append(f"🤝 **Whitelist:** {clip(wl, 500)}\n-# Server owner and this bot are always trusted")
+    needed = {}
+    for perms in MODULE_PERMS.values():
+        needed.update(perms)
+    note = missing_perms(guild, needed)
+    if note:
+        lines.append(note.strip())
+    return InfoView("🛡️ Security Status", "\n\n".join(lines))
+
+
+def update_module(guild, name: str, enabled: bool, **opts) -> discord.ui.LayoutView:
+    cfg = sec_cfg(name)
+    cfg["enabled"] = enabled
+    for key, value in opts.items():
+        if value is None:
+            continue
+        if key in SEC_RANGES:
+            value = clamp(int(value), *SEC_RANGES[key])
+        cfg[key] = value
+    save_config(config)
+    emoji, label = SEC_LABELS[name]
+    note = missing_perms(guild, MODULE_PERMS[name]) if enabled else ""
+    return ok(f"{emoji} {label}", f"{label} is now **{'enabled' if enabled else 'disabled'}**.\n{describe_module(name)}{note}")
+
+
+def panic_view(enabled: bool) -> discord.ui.LayoutView:
+    cfg = sec_cfg("antiraid")
+    cfg["panic"] = enabled
+    if not enabled:
+        raid_state["active_until"] = 0.0
+        raid_state["joins"].clear()
+    save_config(config)
+    if enabled:
+        return InfoView("🚨 Panic Mode ON", f"Every new member will be **{cfg['action']}ed** until you turn it off with `/security panic` or `.panic off`.", discord.Color.red())
+    return ok("✅ Panic Mode OFF", "New members can join normally again.")
+
+
+def whitelist_view(guild, action: str, member) -> discord.ui.LayoutView:
+    ids = whitelist_ids()
+    if action == "list":
+        text = "\n".join(f"<@{i}> (`{i}`)" for i in ids) if ids else "No whitelisted users."
+        return InfoView("🤝 Security Whitelist", text + "\n\n-# Server owner and this bot are always trusted")
+    if member is None:
+        return err("Mention a member.")
+    if action == "add":
+        if member.id not in ids:
+            ids.append(member.id)
+            save_config(config)
+        return ok("🤝 Whitelist Updated", f"{member.mention} is now trusted by the security system.")
+    if member.id in ids:
+        ids.remove(member.id)
+        save_config(config)
+    return ok("🤝 Whitelist Updated", f"{member.mention} removed from the whitelist.")
+
+
+async def send_security(guild, title: str, body: str, color: discord.Color = discord.Color.red(), ping: bool = True):
+    if guild is None or guild.id != GUILD_ID:
+        return
+    cfg = config.get("log_channels", {})
+    channel_id = cfg.get("security") or cfg.get("mod")
+    channel = guild.get_channel(channel_id) if channel_id else None
+    if channel is None:
+        return
+    mentions = NO_MENTIONS
+    text = body
+    if ping and guild.owner_id:
+        mentions = discord.AllowedMentions(everyone=False, roles=False, users=[discord.Object(id=guild.owner_id)])
+        text = f"{body}\n\n<@{guild.owner_id}>"
+    try:
+        await channel.send(view=LogView(title, text, color), allowed_mentions=mentions)
+    except Exception as e:
+        print(f"Security alert failed: {e}")
+
+
+def raid_active() -> bool:
+    return sec_cfg("antiraid")["panic"] or time.time() < raid_state["active_until"]
+
+
+async def raid_punish(member, reason: str) -> bool:
+    cfg = sec_cfg("antiraid")
+    action = cfg["action"]
+    try:
+        if action == "ban":
+            mark_action("ban", member.id)
+            await member.ban(reason=f"AntiRaid: {reason}")
+        elif action == "timeout":
+            mark_action("timeout", member.id)
+            await member.timeout(discord.utils.utcnow() + timedelta(hours=1), reason=f"AntiRaid: {reason}")
+        else:
+            mark_action("kick", member.id)
+            await member.kick(reason=f"AntiRaid: {reason}")
+    except Exception as e:
+        print(f"Raid punish failed: {e}")
+        return False
+    raid_state["count"] += 1
+    return True
+
+
+async def antiraid_on_join(member):
+    cfg = sec_cfg("antiraid")
+    guild = member.guild
+    if guild.id != GUILD_ID or member.bot or not (cfg["enabled"] or cfg["panic"]):
+        return
+    if is_trusted(guild, member.id):
+        return
+    now = time.time()
+    joins = raid_state["joins"]
+    joins.append((now, member.id))
+    while joins and now - joins[0][0] > cfg["window"]:
+        joins.popleft()
+    if cfg["enabled"] and len(joins) >= cfg["threshold"] and not raid_active():
+        raid_state["active_until"] = now + cfg["duration"]
+        raid_state["count"] = 0
+        ids = [mid for _, mid in joins]
+        joins.clear()
+        await send_security(
+            guild,
+            "🚨 Raid Detected",
+            f"**{len(ids)}** members joined within **{cfg['window']}s**.\n"
+            f"**Raid mode:** active for {fmt_time(cfg['duration'])}\n**Action:** {cfg['action']}"
+        )
+        for mid in ids:
+            target = guild.get_member(mid)
+            if target:
+                await raid_punish(target, "Raid detected")
+        await send_security(guild, "🛡️ Raid Response", f"Actioned **{raid_state['count']}** member(s) with **{cfg['action']}**.", discord.Color.orange(), ping=False)
+        return
+    reason = None
+    if raid_active():
+        reason = "Panic mode" if cfg["panic"] else "Raid mode active"
+    elif cfg["enabled"] and cfg["min_age_days"]:
+        age = (discord.utils.utcnow() - member.created_at).days
+        if age < cfg["min_age_days"]:
+            reason = f"Account is {age} day(s) old (minimum {cfg['min_age_days']})"
+    if reason and await raid_punish(member, reason):
+        total = raid_state["count"]
+        if total <= 10 or total % 10 == 0:
+            await send_security(
+                guild,
+                "🚧 Anti-Raid",
+                f"**User:** {fmt_ref(member)}\n**Reason:** {reason}\n**Action:** {cfg['action']}",
+                discord.Color.orange(),
+                ping=False
+            )
+
+
+async def find_audit_retry(guild, action, target_id):
+    entry = await find_audit(guild, action, target_id, within=10)
+    if entry is None:
+        await asyncio.sleep(1.5)
+        entry = await find_audit(guild, action, target_id, within=12)
+    return entry
+
+
+def snapshot_channel(channel) -> dict:
+    return {
+        "name": channel.name,
+        "type": channel.type,
+        "category_id": getattr(channel, "category_id", None),
+        "overwrites": dict(channel.overwrites),
+        "topic": getattr(channel, "topic", None),
+        "nsfw": getattr(channel, "nsfw", False),
+        "slowmode": getattr(channel, "slowmode_delay", 0),
+        "bitrate": getattr(channel, "bitrate", 64000),
+        "user_limit": getattr(channel, "user_limit", 0),
+    }
+
+
+def snapshot_role(role) -> dict:
+    try:
+        member_ids = [m.id for m in role.members][:50]
+    except Exception:
+        member_ids = []
+    return {
+        "name": role.name,
+        "colour": role.colour,
+        "permissions": role.permissions,
+        "hoist": role.hoist,
+        "mentionable": role.mentionable,
+        "members": member_ids,
+    }
+
+
+async def recreate_channel(guild, snap: dict):
+    category = guild.get_channel(snap["category_id"]) if snap.get("category_id") else None
+    overwrites = {t: o for t, o in snap["overwrites"].items() if guild.get_role(t.id) or guild.get_member(t.id)}
+    reason = "AntiNuke: restoring deleted channel"
+    if snap["type"] == discord.ChannelType.category:
+        return await guild.create_category(snap["name"], overwrites=overwrites, reason=reason)
+    if snap["type"] in (discord.ChannelType.voice, discord.ChannelType.stage_voice):
+        return await guild.create_voice_channel(
+            snap["name"], category=category, overwrites=overwrites,
+            bitrate=min(snap["bitrate"], guild.bitrate_limit), user_limit=snap["user_limit"], reason=reason
+        )
+    return await guild.create_text_channel(
+        snap["name"], category=category, overwrites=overwrites, topic=snap.get("topic"),
+        nsfw=snap.get("nsfw", False), slowmode_delay=snap.get("slowmode", 0), reason=reason
+    )
+
+
+async def recreate_role(guild, snap: dict):
+    role = await guild.create_role(
+        name=snap["name"], colour=snap["colour"], permissions=snap["permissions"],
+        hoist=snap["hoist"], mentionable=snap["mentionable"], reason="AntiNuke: restoring deleted role"
+    )
+    for member_id in snap.get("members", []):
+        target = guild.get_member(member_id)
+        if target:
+            try:
+                await target.add_roles(role, reason="AntiNuke: restoring role members")
+            except Exception:
+                pass
+    return role
+
+
+async def nuke_recover(guild, records: list) -> str:
+    restored = removed = failed = 0
+    for _, kind, data in records:
+        try:
+            if kind == "channel_delete" and data:
+                await recreate_channel(guild, data)
+                restored += 1
+            elif kind == "role_delete" and data:
+                await recreate_role(guild, data)
+                restored += 1
+            elif kind == "ban" and data:
+                await guild.unban(discord.Object(id=data), reason="AntiNuke: reverting mass ban")
+                restored += 1
+            elif kind == "channel_create" and data:
+                channel = guild.get_channel(data)
+                if channel:
+                    await channel.delete(reason="AntiNuke: removing channel created during attack")
+                    removed += 1
+            elif kind == "role_create" and data:
+                role = guild.get_role(data)
+                if role:
+                    await role.delete(reason="AntiNuke: removing role created during attack")
+                    removed += 1
+            elif kind == "webhook_create" and data:
+                for webhook in await guild.webhooks():
+                    if webhook.id == data:
+                        await webhook.delete(reason="AntiNuke: removing webhook created during attack")
+                        removed += 1
+        except Exception:
+            failed += 1
+    if not (restored or removed or failed):
+        return "nothing to restore"
+    return f"restored {restored}, removed {removed}, failed {failed}"
+
+
+async def apply_punish(guild, actor_id: int, action: str, reason: str) -> str:
+    member = guild.get_member(actor_id)
+    order = [action] + [a for a in ("ban", "kick", "strip") if a != action]
+    for method in order:
+        try:
+            if method == "ban":
+                mark_action("ban", actor_id)
+                await guild.ban(discord.Object(id=actor_id), reason=reason)
+                return "banned"
+            if method == "kick":
+                if member is None:
+                    continue
+                mark_action("kick", actor_id)
+                await member.kick(reason=reason)
+                return "kicked"
+            if member is None:
+                continue
+            roles = [r for r in member.roles if not r.is_default() and not r.managed and r < guild.me.top_role]
+            if not roles:
+                return "no manageable roles to strip"
+            await member.remove_roles(*roles, reason=reason)
+            return f"stripped {len(roles)} role(s)"
+        except Exception:
+            continue
+    return "failed (bot role is too low?)"
+
+
+async def nuke_punish(guild, actor_id: int, records: list, title: str, extra: str = ""):
+    cfg = sec_cfg("antinuke")
+    nuke_punished[actor_id] = time.time()
+    actor = guild.get_member(actor_id)
+    counts = Counter(kind for _, kind, _ in records)
+    summary = "\n".join(f"• {n} {NUKE_LABELS[k]}" for k, n in counts.items())
+    outcome = await apply_punish(guild, actor_id, cfg["action"], f"AntiNuke: {title}")
+    recovered = ""
+    if cfg["recover"] and records:
+        recovered = f"\n**Recovery:** {await nuke_recover(guild, records)}"
+    who = fmt_ref(actor) if actor else f"<@{actor_id}> (`{actor_id}`)"
+    body = f"**Offender:** {who}\n**Reason:** {title}"
+    if summary:
+        body += f"\n{summary}"
+    if extra:
+        body += f"\n{extra}"
+    body += f"\n**Punishment:** {outcome}{recovered}"
+    await send_security(guild, "☢️ Anti-Nuke Triggered", body)
+
+
+async def nuke_record(guild, kind: str, entry, data=None):
+    cfg = sec_cfg("antinuke")
+    if entry.user is None:
+        return
+    actor_id = entry.user.id
+    if is_trusted(guild, actor_id):
+        return
+    now = time.time()
+    if now - nuke_punished.get(actor_id, 0) < 60:
+        if cfg["recover"]:
+            await nuke_recover(guild, [(now, kind, data)])
+        return
+    group = NUKE_GROUPS[kind]
+    dq = nuke_records.setdefault((actor_id, group), deque())
+    dq.append((now, kind, data))
+    while dq and now - dq[0][0] > cfg["window"]:
+        dq.popleft()
+    limit = cfg["limit"] if group == "structure" else cfg["member_limit"]
+    if len(dq) >= limit:
+        records = list(dq)
+        dq.clear()
+        await nuke_punish(guild, actor_id, records, f"Mass action: {len(records)} in {cfg['window']}s")
+
+
+async def nuke_track(guild, kind: str, audit_action, target_id: int, data=None):
+    if not sec_cfg("antinuke")["enabled"] or guild.id != GUILD_ID:
+        return
+    entry = await find_audit_retry(guild, audit_action, target_id)
+    if entry is not None:
+        await nuke_record(guild, kind, entry, data)
+
+
+def has_dangerous(perms) -> bool:
+    return any(getattr(perms, p) for p in DANGEROUS_PERMS)
+
+
+async def antinuke_role_update_guard(before, after):
+    cfg = sec_cfg("antinuke")
+    guild = after.guild
+    if not cfg["enabled"] or not cfg["guard_perms"] or guild.id != GUILD_ID or after.managed:
+        return
+    gained = [p for p in DANGEROUS_PERMS if getattr(after.permissions, p) and not getattr(before.permissions, p)]
+    if not gained:
+        return
+    entry = await find_audit_retry(guild, discord.AuditLogAction.role_update, after.id)
+    if entry is None or entry.user is None or is_trusted(guild, entry.user.id):
+        return
+    reverted = "reverted"
+    try:
+        await after.edit(permissions=before.permissions, reason="AntiNuke: unauthorized dangerous permission grant")
+    except Exception:
+        reverted = "could not revert"
+    names = ", ".join(p.replace("_", " ") for p in gained)
+    await nuke_punish(guild, entry.user.id, [], "Unauthorized dangerous permission grant", f"**Role:** {after.mention}\n**Permissions:** {names} ({reverted})")
+
+
+async def antinuke_member_role_guard(member, added: list):
+    cfg = sec_cfg("antinuke")
+    guild = member.guild
+    if not cfg["enabled"] or not cfg["guard_perms"] or guild.id != GUILD_ID:
+        return
+    risky = [r for r in added if not r.managed and has_dangerous(r.permissions)]
+    if not risky:
+        return
+    entry = await find_audit_retry(guild, discord.AuditLogAction.member_role_update, member.id)
+    if entry is None or entry.user is None or is_trusted(guild, entry.user.id):
+        return
+    removed = "removed"
+    try:
+        await member.remove_roles(*risky, reason="AntiNuke: unauthorized dangerous role grant")
+    except Exception:
+        removed = "could not remove"
+    names = " ".join(r.mention for r in risky)
+    await nuke_punish(guild, entry.user.id, [], "Unauthorized dangerous role grant", f"**Target:** {fmt_ref(member)}\n**Roles:** {names} ({removed})")
+
+
+async def antinuke_bot_add(member):
+    cfg = sec_cfg("antinuke")
+    guild = member.guild
+    if not member.bot or not cfg["enabled"] or guild.id != GUILD_ID:
+        return
+    entry = await find_audit_retry(guild, discord.AuditLogAction.bot_add, member.id)
+    if entry is None or entry.user is None or is_trusted(guild, entry.user.id):
+        return
+    kicked = "kicked"
+    try:
+        mark_action("kick", member.id)
+        await member.kick(reason="AntiNuke: bot added by an untrusted user")
+    except Exception:
+        kicked = "could not kick"
+    await nuke_punish(guild, entry.user.id, [], "Added a bot without permission", f"**Bot:** {fmt_ref(member)} ({kicked})")
+
+
+def automod_exempt(member) -> bool:
+    perms = member.guild_permissions
+    if perms.administrator or perms.manage_messages:
+        return True
+    return is_trusted(member.guild, member.id)
+
+
+async def automod_punish(message, rule: str, detail: str, minutes: int, purge_recent: bool = False):
+    guild = message.guild
+    member = message.author
+    try:
+        await message.delete()
+    except Exception:
+        pass
+    if purge_recent:
+        try:
+            mark_action("purge", message.channel.id)
+            await message.channel.purge(
+                limit=25,
+                check=lambda m: m.author.id == member.id,
+                after=discord.utils.utcnow() - timedelta(seconds=60)
+            )
+        except Exception:
+            pass
+    timed = ""
+    if minutes > 0:
+        try:
+            mark_action("timeout", member.id)
+            await member.timeout(discord.utils.utcnow() + timedelta(minutes=minutes), reason=f"AutoMod: {rule}")
+            timed = f"\n**Timeout:** {minutes} minute(s)"
+        except Exception:
+            timed = "\n**Timeout:** failed (check bot permissions)"
+    try:
+        sent = await message.channel.send(view=InfoView(f"🛡️ AutoMod — {rule}", f"{member.mention}, {detail}", discord.Color.orange()))
+        asyncio.create_task(delete_after(sent, 6))
+    except Exception:
+        pass
+    await send_security(
+        guild,
+        f"🛡️ AutoMod — {rule}",
+        f"**User:** {fmt_ref(member)}\n**Channel:** {message.channel.mention}\n**Detail:** {detail}{timed}\n\n**Content**\n{quote(message.content or '(empty)', 600)}",
+        discord.Color.orange(),
+        ping=False
+    )
+
+
+async def automod_check(message) -> bool:
+    if not isinstance(message.author, discord.Member) or message.guild.id != GUILD_ID:
+        return False
+    if automod_exempt(message.author):
+        return False
+    content = message.content or ""
+    link_cfg = sec_cfg("antilink")
+    if link_cfg["enabled"]:
+        if link_cfg["invites"] and INVITE_RE.search(content):
+            await automod_punish(message, "Invite Link", "invite links are not allowed here.", link_cfg["timeout_minutes"])
+            return True
+        if link_cfg["links"] and LINK_RE.search(content):
+            await automod_punish(message, "Link", "links are not allowed here.", link_cfg["timeout_minutes"])
+            return True
+    mention_cfg = sec_cfg("antimention")
+    if mention_cfg["enabled"]:
+        count = len({m.id for m in message.mentions}) + len(message.role_mentions)
+        if message.mention_everyone and not message.author.guild_permissions.mention_everyone:
+            count += mention_cfg["limit"]
+        if count >= mention_cfg["limit"]:
+            await automod_punish(message, "Mass Mention", f"mass mentions are not allowed ({count} mentions).", mention_cfg["timeout_minutes"])
+            return True
+    spam_cfg = sec_cfg("antispam")
+    if spam_cfg["enabled"]:
+        now = time.time()
+        dq = spam_tracker.setdefault(message.author.id, deque())
+        dq.append(now)
+        while dq and now - dq[0] > spam_cfg["window"]:
+            dq.popleft()
+        if len(dq) >= spam_cfg["messages"]:
+            dq.clear()
+            await automod_punish(message, "Spam", f"slow down — {spam_cfg['messages']}+ messages in {spam_cfg['window']}s.", spam_cfg["timeout_minutes"], purge_recent=True)
+            return True
+    return False
+
+
+async def security_prefix(message, cmd, args) -> bool:
+    modules = ("antiraid", "antinuke", "antispam", "antilink", "antimention")
+    if cmd not in modules + ("security", "panic", "whitelist", "lockdown", "unlockdown"):
+        return False
+    author = message.author
+    if not author.guild_permissions.administrator:
+        return True
+    send = message.channel.send
+    sub = args[1].lower() if len(args) > 1 else ""
+    on_words = ("on", "enable", "true", "yes")
+    off_words = ("off", "disable", "false", "no")
+    if cmd == "security":
+        if sub == "setup":
+            await send(view=security_setup_view(message.guild))
+            channel = message.channel_mentions[0] if message.channel_mentions else None
+            if channel is not None:
+                await send(view=await apply_log_channel("security", channel))
+        else:
+            await send(view=security_status_view(message.guild))
+    elif cmd == "lockdown":
+        await send(view=ok("🔒 Lockdown Started", "Locking every text channel for @everyone..."))
+        count = await do_lockdown(message.guild, f"Lockdown by {author}")
+        await send_security(message.guild, "🔒 Server Lockdown", f"**By:** {fmt_ref(author)}\n**Channels locked:** {count}", discord.Color.red(), ping=False)
+        await send(view=ok("🔒 Lockdown Active", f"Locked **{count}** channel(s). Use `.unlockdown` to restore."))
+    elif cmd == "unlockdown":
+        await send(view=ok("🔓 Unlocking", "Restoring channel permissions..."))
+        count = await undo_lockdown(message.guild)
+        await send_security(message.guild, "🔓 Lockdown Ended", f"**By:** {fmt_ref(author)}\n**Channels restored:** {count}", discord.Color.green(), ping=False)
+        await send(view=ok("🔓 Lockdown Ended", f"Restored **{count}** channel(s)."))
+    elif cmd == "panic":
+        if sub in on_words:
+            await send(view=panic_view(True))
+        elif sub in off_words:
+            await send(view=panic_view(False))
+        else:
+            await send(view=err("Usage: `.panic <on|off>`"))
+    elif cmd == "whitelist":
+        if author.id != message.guild.owner_id:
+            await send(view=err("Only the server owner can manage the whitelist."))
+        elif sub not in ("add", "remove", "list"):
+            await send(view=err("Usage: `.whitelist <add|remove|list> [@user]`"))
+        else:
+            target = message.mentions[0] if message.mentions else None
+            await send(view=whitelist_view(message.guild, sub, target))
+    else:
+        if sub in on_words:
+            await send(view=update_module(message.guild, cmd, True))
+        elif sub in off_words:
+            await send(view=update_module(message.guild, cmd, False))
+        else:
+            await send(view=err(f"Usage: `.{cmd} <on|off>` — fine-tune with `/security {cmd}`"))
+    return True
+
+
+async def do_lockdown(guild, reason: str) -> int:
+    saved = config.setdefault("security", {}).setdefault("lockdown_channels", {})
+    default = guild.default_role
+    count = 0
+    for ch in guild.text_channels:
+        ow = ch.overwrites_for(default)
+        key = str(ch.id)
+        if key not in saved:
+            saved[key] = ow.send_messages
+        if ow.send_messages is False:
+            continue
+        ow.send_messages = False
+        try:
+            await ch.set_permissions(default, overwrite=ow, reason=reason)
+            count += 1
+        except Exception as e:
+            print(f"Lockdown failed for {ch.id}: {e}")
+        await asyncio.sleep(0.4)
+    save_config(config)
+    return count
+
+
+async def undo_lockdown(guild) -> int:
+    saved = config.setdefault("security", {}).setdefault("lockdown_channels", {})
+    default = guild.default_role
+    count = 0
+    for key, original in list(saved.items()):
+        ch = guild.get_channel(int(key))
+        if ch is None:
+            continue
+        ow = ch.overwrites_for(default)
+        ow.send_messages = original
+        try:
+            if ow.is_empty():
+                await ch.set_permissions(default, overwrite=None, reason="Lockdown ended")
+            else:
+                await ch.set_permissions(default, overwrite=ow, reason="Lockdown ended")
+            count += 1
+        except Exception as e:
+            print(f"Unlock failed for {key}: {e}")
+        await asyncio.sleep(0.4)
+    config["security"]["lockdown_channels"] = {}
+    save_config(config)
+    return count
+
+
+def security_setup_view(guild) -> discord.ui.LayoutView:
+    for name in SEC_DEFAULTS:
+        sec_cfg(name)["enabled"] = True
+    save_config(config)
+    return security_status_view(guild)
 
 
 GUILD_OBJ = discord.Object(id=GUILD_ID)
@@ -2169,6 +2883,195 @@ async def logs_status(interaction: discord.Interaction):
 
 tree.add_command(logs_group)
 
+security_group = discord.app_commands.Group(
+    name="security",
+    description="Security system (anti-raid, anti-nuke, automod)",
+    guild_ids=[GUILD_ID],
+    default_permissions=discord.Permissions(administrator=True)
+)
+
+SEC_ACTION_RAID = [
+    discord.app_commands.Choice(name="Kick", value="kick"),
+    discord.app_commands.Choice(name="Ban", value="ban"),
+    discord.app_commands.Choice(name="Timeout (1h)", value="timeout"),
+]
+SEC_ACTION_NUKE = [
+    discord.app_commands.Choice(name="Strip roles", value="strip"),
+    discord.app_commands.Choice(name="Kick", value="kick"),
+    discord.app_commands.Choice(name="Ban", value="ban"),
+]
+
+
+async def deny_unless_admin(interaction: discord.Interaction) -> bool:
+    if interaction.user.guild_permissions.administrator:
+        return False
+    await interaction.response.send_message(view=err("Administrator permission required."), ephemeral=True)
+    return True
+
+
+@security_group.command(name="status", description="Show the security system status")
+async def sec_status(interaction: discord.Interaction):
+    if await deny_unless_admin(interaction):
+        return
+    await interaction.response.send_message(view=security_status_view(interaction.guild), ephemeral=True)
+
+
+@security_group.command(name="antiraid", description="Configure anti-raid")
+@discord.app_commands.describe(
+    enabled="Turn anti-raid on or off",
+    threshold="Joins within the window that trigger raid mode",
+    seconds="Join-detection window in seconds",
+    action="What to do with raiders",
+    min_account_age="Action accounts younger than this many days (0 = off)",
+    duration="How long raid mode lasts in seconds"
+)
+@discord.app_commands.choices(action=SEC_ACTION_RAID)
+async def sec_antiraid(
+    interaction: discord.Interaction,
+    enabled: bool,
+    threshold: int = None,
+    seconds: int = None,
+    action: discord.app_commands.Choice[str] = None,
+    min_account_age: int = None,
+    duration: int = None
+):
+    if await deny_unless_admin(interaction):
+        return
+    view = update_module(
+        interaction.guild, "antiraid", enabled,
+        threshold=threshold, window=seconds, action=action.value if action else None,
+        min_age_days=min_account_age, duration=duration
+    )
+    await interaction.response.send_message(view=view, ephemeral=True)
+
+
+@security_group.command(name="panic", description="Instantly action every new member until turned off")
+@discord.app_commands.describe(enabled="Panic mode on or off")
+async def sec_panic(interaction: discord.Interaction, enabled: bool):
+    if await deny_unless_admin(interaction):
+        return
+    await interaction.response.send_message(view=panic_view(enabled), ephemeral=True)
+
+
+@security_group.command(name="antinuke", description="Configure anti-nuke")
+@discord.app_commands.describe(
+    enabled="Turn anti-nuke on or off",
+    limit="Channel/role/webhook actions allowed per window",
+    member_limit="Bans/kicks allowed per window",
+    seconds="Detection window in seconds",
+    action="Punishment for the offender",
+    recover="Restore deleted channels/roles and undo the attack",
+    guard_perms="Revert dangerous permission grants by untrusted users"
+)
+@discord.app_commands.choices(action=SEC_ACTION_NUKE)
+async def sec_antinuke(
+    interaction: discord.Interaction,
+    enabled: bool,
+    limit: int = None,
+    member_limit: int = None,
+    seconds: int = None,
+    action: discord.app_commands.Choice[str] = None,
+    recover: bool = None,
+    guard_perms: bool = None
+):
+    if await deny_unless_admin(interaction):
+        return
+    view = update_module(
+        interaction.guild, "antinuke", enabled,
+        limit=limit, member_limit=member_limit, window=seconds,
+        action=action.value if action else None, recover=recover, guard_perms=guard_perms
+    )
+    await interaction.response.send_message(view=view, ephemeral=True)
+
+
+@security_group.command(name="antispam", description="Configure anti-spam")
+@discord.app_commands.describe(
+    enabled="Turn anti-spam on or off",
+    messages="Messages allowed within the window",
+    seconds="Window in seconds",
+    timeout_minutes="Timeout length in minutes (0 = delete only)"
+)
+async def sec_antispam(interaction: discord.Interaction, enabled: bool, messages: int = None, seconds: int = None, timeout_minutes: int = None):
+    if await deny_unless_admin(interaction):
+        return
+    view = update_module(interaction.guild, "antispam", enabled, messages=messages, window=seconds, timeout_minutes=timeout_minutes)
+    await interaction.response.send_message(view=view, ephemeral=True)
+
+
+@security_group.command(name="antilink", description="Configure anti-link")
+@discord.app_commands.describe(
+    enabled="Turn anti-link on or off",
+    invites="Block Discord invite links",
+    links="Block all links",
+    timeout_minutes="Timeout length in minutes (0 = delete only)"
+)
+async def sec_antilink(interaction: discord.Interaction, enabled: bool, invites: bool = None, links: bool = None, timeout_minutes: int = None):
+    if await deny_unless_admin(interaction):
+        return
+    view = update_module(interaction.guild, "antilink", enabled, invites=invites, links=links, timeout_minutes=timeout_minutes)
+    await interaction.response.send_message(view=view, ephemeral=True)
+
+
+@security_group.command(name="antimention", description="Configure anti-mass-mention")
+@discord.app_commands.describe(
+    enabled="Turn anti-mass-mention on or off",
+    limit="Mentions in one message that trigger it",
+    timeout_minutes="Timeout length in minutes (0 = delete only)"
+)
+async def sec_antimention(interaction: discord.Interaction, enabled: bool, limit: int = None, timeout_minutes: int = None):
+    if await deny_unless_admin(interaction):
+        return
+    view = update_module(interaction.guild, "antimention", enabled, limit=limit, timeout_minutes=timeout_minutes)
+    await interaction.response.send_message(view=view, ephemeral=True)
+
+
+@security_group.command(name="whitelist", description="Manage trusted users (server owner only)")
+@discord.app_commands.describe(action="Add, remove or list", member="Member to add or remove")
+@discord.app_commands.choices(action=[
+    discord.app_commands.Choice(name="Add", value="add"),
+    discord.app_commands.Choice(name="Remove", value="remove"),
+    discord.app_commands.Choice(name="List", value="list"),
+])
+async def sec_whitelist(interaction: discord.Interaction, action: discord.app_commands.Choice[str], member: discord.Member = None):
+    if interaction.user.id != interaction.guild.owner_id:
+        await interaction.response.send_message(view=err("Only the server owner can manage the whitelist."), ephemeral=True)
+        return
+    await interaction.response.send_message(view=whitelist_view(interaction.guild, action.value, member), ephemeral=True)
+
+
+@security_group.command(name="setup", description="Turn on every security module with default settings")
+@discord.app_commands.describe(log_channel="Channel for security alerts (optional)")
+async def sec_setup(interaction: discord.Interaction, log_channel: discord.TextChannel = None):
+    if await deny_unless_admin(interaction):
+        return
+    await interaction.response.defer(ephemeral=True)
+    await interaction.followup.send(view=security_setup_view(interaction.guild), ephemeral=True)
+    if log_channel is not None:
+        await interaction.followup.send(view=await apply_log_channel("security", log_channel), ephemeral=True)
+
+
+@security_group.command(name="lockdown", description="Lock every text channel for @everyone")
+async def sec_lockdown(interaction: discord.Interaction):
+    if await deny_unless_admin(interaction):
+        return
+    await interaction.response.defer(ephemeral=True)
+    count = await do_lockdown(interaction.guild, f"Lockdown by {interaction.user}")
+    await send_security(interaction.guild, "🔒 Server Lockdown", f"**By:** {fmt_ref(interaction.user)}\n**Channels locked:** {count}", discord.Color.red(), ping=False)
+    await interaction.followup.send(view=ok("🔒 Lockdown Active", f"Locked **{count}** channel(s). Use `/security unlockdown` to restore."), ephemeral=True)
+
+
+@security_group.command(name="unlockdown", description="Restore channel permissions after a lockdown")
+async def sec_unlockdown(interaction: discord.Interaction):
+    if await deny_unless_admin(interaction):
+        return
+    await interaction.response.defer(ephemeral=True)
+    count = await undo_lockdown(interaction.guild)
+    await send_security(interaction.guild, "🔓 Lockdown Ended", f"**By:** {fmt_ref(interaction.user)}\n**Channels restored:** {count}", discord.Color.green(), ping=False)
+    await interaction.followup.send(view=ok("🔓 Lockdown Ended", f"Restored **{count}** channel(s)."), ephemeral=True)
+
+
+tree.add_command(security_group)
+
 
 @bot.event
 async def on_message_delete(message):
@@ -2226,6 +3129,9 @@ async def on_message(message):
                 asyncio.create_task(delete_after(sent, 60))
                 return
 
+    if message.guild and await automod_check(message):
+        return
+
     if not message.content.startswith(PREFIX):
         bypass_channel_id = config.get("channel_id")
         if (
@@ -2247,6 +3153,9 @@ async def on_message(message):
     if not args:
         return
     cmd = args[0].lower()
+
+    if await security_prefix(message, cmd, args):
+        return
 
     if await logs_prefix(message, cmd, args):
         return
@@ -2648,6 +3557,8 @@ async def on_raw_bulk_message_delete(payload):
 async def on_member_join(member):
     if member.guild.id != GUILD_ID:
         return
+    asyncio.create_task(antiraid_on_join(member))
+    asyncio.create_task(antinuke_bot_add(member))
     age = (discord.utils.utcnow() - member.created_at).days
     body = (
         f"**User:** {fmt_ref(member)}\n"
@@ -2665,6 +3576,7 @@ async def on_member_remove(member):
     guild = member.guild
     if guild.id != GUILD_ID:
         return
+    asyncio.create_task(nuke_track(guild, "kick", discord.AuditLogAction.kick, member.id, None))
     if peek_action("ban", member.id):
         return
     if consume_action("kick", member.id):
@@ -2688,6 +3600,7 @@ async def on_member_remove(member):
 async def on_member_ban(guild, user):
     if guild.id != GUILD_ID:
         return
+    asyncio.create_task(nuke_track(guild, "ban", discord.AuditLogAction.ban, user.id, user.id))
     if consume_action("ban", user.id):
         return
     entry = await find_audit(guild, discord.AuditLogAction.ban, user.id)
@@ -2721,6 +3634,8 @@ async def on_member_update(before, after):
         await send_log(guild, "member", LogView("✏️ Nickname Changed", body, discord.Color.blurple()))
     added = [r for r in after.roles if r not in before.roles]
     removed = [r for r in before.roles if r not in after.roles]
+    if added:
+        asyncio.create_task(antinuke_member_role_guard(after, added))
     if added or removed:
         entry = await find_audit(guild, discord.AuditLogAction.member_role_update, after.id)
         body = f"**Member:** {fmt_ref(after)}"
@@ -2764,6 +3679,7 @@ async def on_voice_state_update(member, before, after):
 async def on_guild_channel_create(channel):
     if channel.guild.id != GUILD_ID:
         return
+    asyncio.create_task(nuke_track(channel.guild, "channel_create", discord.AuditLogAction.channel_create, channel.id, channel.id))
     entry = await find_audit(channel.guild, discord.AuditLogAction.channel_create, channel.id)
     body = f"**Channel:** {channel.mention} (`{channel.id}`)\n**Type:** {str(channel.type).replace('_', ' ').title()}"
     if entry and entry.user:
@@ -2775,6 +3691,7 @@ async def on_guild_channel_create(channel):
 async def on_guild_channel_delete(channel):
     if channel.guild.id != GUILD_ID:
         return
+    asyncio.create_task(nuke_track(channel.guild, "channel_delete", discord.AuditLogAction.channel_delete, channel.id, snapshot_channel(channel)))
     entry = await find_audit(channel.guild, discord.AuditLogAction.channel_delete, channel.id)
     body = f"**Channel:** #{channel.name} (`{channel.id}`)\n**Type:** {str(channel.type).replace('_', ' ').title()}"
     if entry and entry.user:
@@ -2812,6 +3729,7 @@ async def on_guild_channel_update(before, after):
 async def on_guild_role_create(role):
     if role.guild.id != GUILD_ID:
         return
+    asyncio.create_task(nuke_track(role.guild, "role_create", discord.AuditLogAction.role_create, role.id, role.id))
     entry = await find_audit(role.guild, discord.AuditLogAction.role_create, role.id)
     body = f"**Role:** {role.mention} (`{role.id}`)"
     if entry and entry.user:
@@ -2823,6 +3741,7 @@ async def on_guild_role_create(role):
 async def on_guild_role_delete(role):
     if role.guild.id != GUILD_ID:
         return
+    asyncio.create_task(nuke_track(role.guild, "role_delete", discord.AuditLogAction.role_delete, role.id, snapshot_role(role)))
     entry = await find_audit(role.guild, discord.AuditLogAction.role_delete, role.id)
     body = f"**Role:** {role.name} (`{role.id}`)"
     if entry and entry.user:
@@ -2834,6 +3753,7 @@ async def on_guild_role_delete(role):
 async def on_guild_role_update(before, after):
     if after.guild.id != GUILD_ID:
         return
+    asyncio.create_task(antinuke_role_update_guard(before, after))
     changes = []
     if before.name != after.name:
         changes.append(f"**Name:** `{before.name}` → `{after.name}`")
@@ -2904,6 +3824,26 @@ async def on_invite_delete(invite):
 
 
 @bot.event
+async def on_webhooks_update(channel):
+    guild = channel.guild
+    if guild.id != GUILD_ID or not sec_cfg("antinuke")["enabled"]:
+        return
+    await asyncio.sleep(1)
+    try:
+        async for entry in guild.audit_logs(limit=5, action=discord.AuditLogAction.webhook_create):
+            if entry.id in seen_audit:
+                continue
+            if (discord.utils.utcnow() - entry.created_at).total_seconds() > 15:
+                continue
+            seen_audit.add(entry.id)
+            if len(seen_audit) > 500:
+                seen_audit.clear()
+            await nuke_record(guild, "webhook_create", entry, getattr(entry.target, "id", None))
+    except Exception as e:
+        print(f"Webhook audit failed: {e}")
+
+
+@bot.event
 async def on_ready():
     bot.add_view(VerifyView())
     bot.add_view(GiveawayPersistentView())
@@ -2914,4 +3854,3 @@ async def on_ready():
 
 
 bot.run(TOKEN)
-
