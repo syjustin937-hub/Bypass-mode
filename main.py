@@ -328,8 +328,7 @@ HELP_PAGES = [
         "`.cidr <ip/prefix>` Subnet calculator\n"
         "`.counting setup #channel` Counting game\n"
         "`.todo` Your personal todo list\n"
-        "`.help` Show this menu\n\n"
-        "Slash: `/info` `/tools` `/text` hold every utility command"
+        "`.help` Show this menu"
     ),
     (
         "Network & Dev",
@@ -367,23 +366,35 @@ HELP_PAGES = [
         "`.unban <userID>`\n"
         "`.timeout @user <minutes> [reason]`\n"
         "`.untimeout @user`\n"
-        "`.purge <amount>`\n"
-        "`.mute @user [duration] [reason]`\n"
-        "`.unmute @user`\n"
-        "`.tempban @user <duration> [reason]`\n"
-        "`.hackban <userID> [reason]`\n"
-        "`.massban <id> <id> ... [reason]`\n\n"
-        "**Warnings & Cases**\n"
+        "`.purge <amount>`\n\n"
+        "**Warnings**\n"
         "`.warn @user [reason]`\n"
-        "`.warns [@user]` `.warninfo [@user]`\n"
-        "`.clearwarns @user` `.warnreset @user`\n"
-        "`.case view|list|recent|reason|remove|removeall`\n"
-        "`.appeals status|channel|window|questions`\n\n"
+        "`.warns [@user]`\n"
+        "`.clearwarns @user`\n\n"
         "**Channels**\n"
-        "`.lock [#channel]` `.unlock [#channel]`\n"
-        "`.hide [#channel]` `.unhide [#channel]`\n"
-        "`.nuke [#channel]`\n"
+        "`.lock [#channel]`\n"
+        "`.unlock [#channel]`\n"
         "`.slowmode <seconds> [#channel]`"
+    ),
+    (
+        "Moderation Plus",
+        "**Messaging & Roles**\n"
+        "`.dm @user <message>` `.roleall <add|remove> @role [humans|bots|everyone]`\n"
+        "`.massrole <add|remove> @role @user...` `.giverole @user @role`\n"
+        "`.role create|delete|rename|color|hoist|mentionable|add|remove`\n"
+        "`.reactionrole add|remove|list` `.stickyroles <on|off|status>`\n"
+        "`.staffroles <add|remove|list> [@role]` `.extraowner <add|remove|list> [@user]`\n\n"
+        "**Punishments**\n"
+        "`.jail setup` `.jail @user [reason]` `.unjail @user`\n"
+        "`.softban @user [reason]` `.restrict @user` `.picperms @user [#channel]`\n"
+        "`.forcenick @user <nickname|off>` `.honeypot set #channel [action]`\n"
+        "`.masspurge @user [limit]` `.moveall #voice`\n\n"
+        "**Staff Tools**\n"
+        "`.modmail <setup|off|status|reply|close|block|unblock>`\n"
+        "`.modnote <add|view|remove> @user` `.modstats [days]`\n"
+        "`.ignoredchannels <add|remove|list> [#channel]`\n"
+        "`.suggest <text>` `.suggestions <setup|off|status|approve|deny>`\n\n"
+        "Every command also works as a slash command"
     ),
     (
         "Economy",
@@ -1666,13 +1677,9 @@ async def send_log(guild, category: str, view: discord.ui.LayoutView):
 
 
 async def log_mod(guild, action: str, moderator, target=None, reason=None, extra=None):
+    mx_record(action, moderator)
     icon, color = ACTION_STYLE.get(action, ("🛡️", discord.Color.blurple()))
-    case = record_case(action, moderator, target, reason)
-    if case and action == "Ban":
-        asyncio.create_task(appeal_notify(guild, target, reason))
     lines = [f"**Moderator:** {fmt_ref(moderator)}"]
-    if case:
-        lines.append(f"**Case:** #{case['id']}")
     if target is not None:
         lines.append(f"**Target:** {fmt_ref(target)}")
     if reason:
@@ -2283,6 +2290,8 @@ async def antinuke_bot_add(member):
 def automod_exempt(member) -> bool:
     perms = member.guild_permissions
     if perms.administrator or perms.manage_messages:
+        return True
+    if mx_is_staff_member(member):
         return True
     return is_trusted(member.guild, member.id)
 
@@ -3215,6 +3224,9 @@ async def on_message(message):
     if message.author.bot:
         return
 
+    if await mx_message_hook(message):
+        return
+
     if message.guild and message.mentions:
         afk_data = config.get("afk", {})
         for mentioned in message.mentions:
@@ -3292,7 +3304,7 @@ async def on_message(message):
     if await util_prefix(message, cmd, args):
         return
 
-    if await mod_prefix(message, cmd, args):
+    if await mx_prefix(message, cmd, args):
         return
 
     if cmd == "help":
@@ -3704,6 +3716,7 @@ async def on_member_join(member):
     asyncio.create_task(antiraid_on_join(member))
     asyncio.create_task(antinuke_bot_add(member))
     asyncio.create_task(wl_on_join(member))
+    asyncio.create_task(mx_on_join(member))
     age = (discord.utils.utcnow() - member.created_at).days
     body = (
         f"**User:** {fmt_ref(member)}\n"
@@ -3721,6 +3734,7 @@ async def on_member_remove(member):
     guild = member.guild
     if guild.id != GUILD_ID:
         return
+    mx_on_leave(member)
     asyncio.create_task(nuke_track(guild, "kick", discord.AuditLogAction.kick, member.id, None))
     if peek_action("ban", member.id):
         return
@@ -3767,6 +3781,7 @@ async def on_member_update(before, after):
     guild = after.guild
     if guild.id != GUILD_ID:
         return
+    asyncio.create_task(mx_on_member_update(before, after))
     if before.nick != after.nick:
         entry = await find_audit(guild, discord.AuditLogAction.member_update, after.id)
         body = (
@@ -7161,1213 +7176,1765 @@ async def util_prefix(message: discord.Message, cmd: str, args: list) -> bool:
     return True
 
 
-from types import SimpleNamespace
-
 ACTION_STYLE.update({
-    "Tempban": ("⏱️", discord.Color.red()),
-    "Hackban": ("🔨", discord.Color.red()),
-    "Massban": ("🔨", discord.Color.dark_red()),
-    "Nuke": ("💥", discord.Color.orange()),
-    "Hide": ("🙈", discord.Color.red()),
-    "Unhide": ("👁️", discord.Color.green()),
+    "DM": ("✉️", discord.Color.blurple()),
+    "Softban": ("🔨", discord.Color.orange()),
+    "Jail": ("⛓️", discord.Color.red()),
+    "Unjail": ("🔓", discord.Color.green()),
+    "Honeypot": ("🍯", discord.Color.red()),
+    "Mass Purge": ("🗑️", discord.Color.blurple()),
+    "Mass Role": ("🎭", discord.Color.blurple()),
+    "Role All": ("🎭", discord.Color.blurple()),
+    "Force Nick": ("✏️", discord.Color.blurple()),
+    "Restrict": ("🚫", discord.Color.orange()),
+    "Unrestrict": ("✅", discord.Color.green()),
+    "Mod Note": ("📝", discord.Color.blurple()),
+    "Move All": ("🔀", discord.Color.blurple()),
+    "Pic Perms": ("🖼️", discord.Color.orange()),
+    "Suggestion Review": ("💡", discord.Color.gold()),
+    "ModMail": ("📩", discord.Color.blurple()),
+    "Staff Roles": ("🛡️", discord.Color.blurple()),
+    "Extra Owner": ("👑", discord.Color.gold()),
 })
 
-CASE_ACTIONS = {"Kick", "Ban", "Unban", "Timeout", "Untimeout", "Warn", "Tempban", "Hackban", "Auto Kick"}
-MASSBAN_MAX = 50
-ID_RE = re.compile(r"\d{15,21}")
-DUR_RE = re.compile(r"(?:\d+[smhd])+|\d+")
-MOD_PREFIX_CMDS = (
-    "mute", "unmute", "tempban", "hackban", "massban", "nuke",
-    "hide", "unhide", "case", "warninfo", "warnreset", "appeals",
-)
+MX_NO_MENTIONS = discord.AllowedMentions.none()
+MX_IMAGE_RE = re.compile(r"https?://\S*(\.(png|jpe?g|gif|webp)|tenor\.com|giphy\.com|imgur\.com|cdn\.discordapp|media\.discordapp)\S*", re.I)
+MX_PUNISHMENTS = ["ban", "softban", "kick", "timeout", "jail"]
 
 
-def dur_seconds(text: str) -> int:
-    t = text.strip().lower()
-    if t.isdigit():
-        return int(t) * 60
-    return parse_duration(t)
-
-
-def ap_cfg() -> dict:
-    c = config.setdefault("appeals", {})
-    c.setdefault("channel_id", None)
-    c.setdefault("window_days", 30)
-    c.setdefault("questions", ["Why were you banned?", "Why should we unban you?", "Anything else you want to add?"])
-    c.setdefault("bans", {})
-    c.setdefault("pending", [])
-    return c
-
-
-def record_case(action, moderator, target, reason):
-    if action not in CASE_ACTIONS or target is None or isinstance(target, discord.abc.GuildChannel):
-        return None
-    store = config.setdefault("cases", {"next": 1, "items": []})
-    now = int(time.time())
-    item = {
-        "id": store["next"],
-        "type": action,
-        "user_id": target.id,
-        "moderator_id": getattr(moderator, "id", None),
-        "reason": reason or "No reason provided",
-        "timestamp": now,
+def mx_cfg() -> dict:
+    store = config.setdefault("mx", {})
+    defaults = {
+        "forcenick": {},
+        "honeypot": {},
+        "ignored": [],
+        "jail": {},
+        "jail_cfg": {},
+        "modmail": {},
+        "modnotes": {},
+        "modlog": [],
+        "reactionroles": {},
+        "restricted": [],
+        "staffroles": [],
+        "sticky": {},
+        "sticky_on": False,
+        "suggest": {},
+        "suggestions": {},
+        "suggest_id": 0,
     }
-    store["next"] += 1
-    store["items"].append(item)
-    if len(store["items"]) > 5000:
-        del store["items"][:len(store["items"]) - 5000]
-    cfg = ap_cfg()
-    if action in ("Ban", "Hackban"):
-        cfg["bans"][str(target.id)] = now
-    elif action == "Unban":
-        cfg["bans"].pop(str(target.id), None)
+    for key, value in defaults.items():
+        store.setdefault(key, value)
+    return store
+
+
+def mx_save():
     save_config(config)
-    return item
 
 
-def mod_can_target(guild, moderator, target):
-    if target.id == moderator.id:
-        return "You can't do that to yourself."
+class MxCtx:
+    def __init__(self, source):
+        self.source = source
+        self.is_slash = isinstance(source, discord.Interaction)
+        self.guild = source.guild
+        self.user = source.user if self.is_slash else source.author
+        self.channel = source.channel
+
+    async def defer(self):
+        if self.is_slash and not self.source.response.is_done():
+            await self.source.response.defer()
+
+    async def working(self, text: str):
+        if self.is_slash:
+            await self.defer()
+        else:
+            await self.channel.send(view=InfoView("Working...", text, discord.Color.blurple()), allowed_mentions=MX_NO_MENTIONS)
+
+    async def send(self, view, ephemeral: bool = False):
+        if self.is_slash:
+            if self.source.response.is_done():
+                return await self.source.followup.send(view=view, ephemeral=ephemeral, allowed_mentions=MX_NO_MENTIONS)
+            await self.source.response.send_message(view=view, ephemeral=ephemeral, allowed_mentions=MX_NO_MENTIONS)
+            return None
+        return await self.channel.send(view=view, allowed_mentions=MX_NO_MENTIONS)
+
+
+async def mx_guard(ctx, coro):
+    try:
+        await coro
+    except discord.Forbidden:
+        await ctx.send(err("I don't have permission to do that. Check my role position and permissions."), ephemeral=True)
+    except discord.HTTPException as e:
+        await ctx.send(err(clip(str(e), 300)), ephemeral=True)
+    except Exception as e:
+        print(f"MX command failed: {e}")
+        await ctx.send(err("Something went wrong running that command."), ephemeral=True)
+
+
+def mx_can(member, *perms) -> bool:
+    gp = member.guild_permissions
+    if gp.administrator or is_trusted(member.guild, member.id):
+        return True
+    return any(getattr(gp, p) for p in perms)
+
+
+def mx_is_staff_member(member) -> bool:
+    staff = set(mx_cfg()["staffroles"])
+    return any(r.id in staff for r in getattr(member, "roles", []))
+
+
+def mx_exempt(member) -> bool:
+    gp = member.guild_permissions
+    if gp.administrator or gp.manage_messages:
+        return True
+    return is_trusted(member.guild, member.id) or mx_is_staff_member(member)
+
+
+def mx_super(member) -> bool:
+    return member.guild_permissions.administrator or is_trusted(member.guild, member.id)
+
+
+async def mx_deny(ctx):
+    await ctx.send(err("You don't have permission to use this command."), ephemeral=True)
+
+
+def mx_hier_error(guild, actor, target):
     if target.id == guild.owner_id:
         return "You can't do that to the server owner."
+    if bot.user is not None and target.id == bot.user.id:
+        return "I can't do that to myself."
     if isinstance(target, discord.Member):
-        if bot.user is not None and target.id == bot.user.id:
-            return "I can't do that to myself."
-        if moderator.id != guild.owner_id and target.top_role >= moderator.top_role:
-            return "That member has an equal or higher role than you."
-        if guild.me is not None and target.top_role >= guild.me.top_role:
-            return "That member has an equal or higher role than me."
+        if actor.id != guild.owner_id and target.top_role >= actor.top_role:
+            return "That member's top role is equal to or higher than yours."
+        if target.top_role >= guild.me.top_role:
+            return "That member's top role is equal to or higher than mine."
     return None
 
 
-async def act_mute(guild, moderator, member, seconds, reason):
-    problem = mod_can_target(guild, moderator, member)
-    if problem:
-        return FailedView(problem)
-    if seconds <= 0:
-        return FailedView("Invalid duration. Example: `10m`, `2h`, `1d`")
-    seconds = min(seconds, 2419200)
-    minutes = max(1, seconds // 60)
-    until = datetime.now(timezone.utc) + timedelta(seconds=seconds)
-    try:
-        mark_action("timeout", member.id)
-        await member.timeout(until, reason=reason)
-    except discord.Forbidden:
-        return FailedView("I don't have permission to timeout that member.")
-    except Exception as e:
-        return FailedView(str(e))
-    await log_mod(guild, "Timeout", moderator, member, reason, f"**Duration:** {fmt_time(seconds)}\n**Until:** <t:{int(until.timestamp())}:F>")
-    return TimeoutResultView(member, minutes, reason)
+def mx_role_error(guild, actor, role):
+    if role.is_default() or role.managed:
+        return "That role can't be managed."
+    if role >= guild.me.top_role:
+        return "That role is higher than or equal to my top role."
+    if actor.id != guild.owner_id and role >= actor.top_role:
+        return "That role is higher than or equal to your top role."
+    return None
 
 
-async def act_unmute(guild, moderator, member):
-    try:
-        mark_action("untimeout", member.id)
-        await member.timeout(None)
-    except discord.Forbidden:
-        return FailedView("I don't have permission to remove that timeout.")
-    except Exception as e:
-        return FailedView(str(e))
-    await log_mod(guild, "Untimeout", moderator, member)
-    return UntimeoutResultView(member)
+def mx_color(text):
+    t = (text or "").strip().lstrip("#")
+    if re.fullmatch(r"[0-9a-fA-F]{6}", t):
+        return discord.Colour(int(t, 16))
+    return None
 
 
-async def act_tempban(guild, moderator, uid, seconds, reason):
-    member = guild.get_member(uid)
-    problem = mod_can_target(guild, moderator, member or discord.Object(id=uid))
-    if problem:
-        return FailedView(problem)
-    if seconds < 60:
-        return FailedView("Invalid duration. Example: `1h`, `2d`, `1d12h`")
-    try:
-        user = member or await bot.fetch_user(uid)
-    except discord.NotFound:
-        return FailedView("User not found.")
-    except Exception as e:
-        return FailedView(str(e))
-    try:
-        mark_action("ban", uid)
-        await guild.ban(user, reason=reason, delete_message_days=0)
-    except discord.Forbidden:
-        return FailedView("I don't have permission to ban that user.")
-    except Exception as e:
-        return FailedView(str(e))
-    until = int(time.time()) + seconds
-    config.setdefault("tempbans", {})[str(uid)] = {"until": until, "reason": reason}
-    save_config(config)
-    await log_mod(guild, "Tempban", moderator, user, reason, f"**Duration:** {fmt_time(seconds)}\n**Unbans:** <t:{until}:R>")
-    return InfoView(
-        "Member Temp-Banned",
-        f"**User:** {user.mention} (`{user.id}`)\n**Duration:** {fmt_time(seconds)}\n**Unbans:** <t:{until}:R>\n**Reason:** {reason}",
-        discord.Color.red(),
+def mx_card(title: str, body: str, color: discord.Color = discord.Color.blurple()) -> discord.ui.LayoutView:
+    view = discord.ui.LayoutView(timeout=None)
+    view.add_item(
+        discord.ui.Container(
+            discord.ui.TextDisplay(f"**{clip(title, 200)}**\n{clip(body, 3500)}"),
+            accent_color=color
+        )
     )
+    return view
 
 
-async def tempban_loop():
-    await bot.wait_until_ready()
-    while True:
+def mx_tail(message, n: int) -> str:
+    parts = message.content[len(PREFIX):].split(None, n)
+    return parts[n].strip() if len(parts) > n else ""
+
+
+def mx_plain_ids(args) -> list:
+    return [int(a) for a in args if a.isdigit() and 15 <= len(a) <= 20]
+
+
+def mx_members(message, args) -> list:
+    found = list(message.mentions)
+    for i in mx_plain_ids(args):
+        m = message.guild.get_member(i)
+        if m is not None and m not in found:
+            found.append(m)
+    return found
+
+
+def mx_roles(message, args) -> list:
+    found = list(message.role_mentions)
+    for i in mx_plain_ids(args):
+        r = message.guild.get_role(i)
+        if r is not None and r not in found:
+            found.append(r)
+    return found
+
+
+def mx_channels(message, args) -> list:
+    found = list(message.channel_mentions)
+    for i in mx_plain_ids(args):
+        c = message.guild.get_channel(i)
+        if c is not None and c not in found:
+            found.append(c)
+    return found
+
+
+async def mx_user_from(message, args):
+    if message.mentions:
+        return message.mentions[0]
+    for i in mx_plain_ids(args):
+        m = message.guild.get_member(i)
+        if m is not None:
+            return m
         try:
-            data = config.get("tempbans", {})
-            now = int(time.time())
-            due = [uid for uid, t in data.items() if t["until"] <= now]
-            guild = bot.get_guild(GUILD_ID)
-            for uid in due:
-                if guild is None:
-                    break
-                try:
-                    mark_action("unban", int(uid))
-                    await guild.unban(discord.Object(id=int(uid)), reason="Tempban expired")
-                    try:
-                        user = await bot.fetch_user(int(uid))
-                    except Exception:
-                        user = discord.Object(id=int(uid))
-                    await log_mod(guild, "Unban", bot.user, user, "Tempban expired")
-                except discord.NotFound:
-                    pass
-                except Exception as e:
-                    print(f"Tempban unban failed: {e}")
-                    continue
-                data.pop(uid, None)
-            if due:
-                save_config(config)
-        except Exception as e:
-            print(f"Tempban loop error: {e}")
-        await asyncio.sleep(30)
+            return await bot.fetch_user(i)
+        except Exception:
+            continue
+    return None
 
 
-async def act_hackban(guild, moderator, uid, reason):
-    problem = mod_can_target(guild, moderator, guild.get_member(uid) or discord.Object(id=uid))
-    if problem:
-        return FailedView(problem)
+def mx_ids_in(text: str) -> list:
+    return [int(x) for x in re.findall(r"\d{15,20}", text or "")]
+
+
+def mx_record(action: str, moderator):
+    log = mx_cfg()["modlog"]
+    log.append({"t": int(time.time()), "a": action, "m": getattr(moderator, "id", 0)})
+    if len(log) > 5000:
+        del log[:len(log) - 5000]
+    mx_save()
+
+
+def mx_choices(*names) -> list:
+    return [discord.app_commands.Choice(name=n, value=n) for n in names]
+
+
+async def mx_punish(guild, member, kind: str, reason: str):
     try:
-        user = await bot.fetch_user(uid)
-    except discord.NotFound:
-        return FailedView("User not found.")
+        if kind == "ban":
+            mark_action("ban", member.id)
+            await guild.ban(member, reason=reason, delete_message_days=1)
+        elif kind == "softban":
+            mark_action("ban", member.id)
+            await guild.ban(member, reason=reason, delete_message_days=7)
+            mark_action("unban", member.id)
+            await guild.unban(member, reason="Softban")
+        elif kind == "kick":
+            mark_action("kick", member.id)
+            await member.kick(reason=reason)
+        elif kind == "timeout":
+            mark_action("timeout", member.id)
+            await member.timeout(discord.utils.utcnow() + timedelta(days=1), reason=reason)
+        elif kind == "jail":
+            err_text = await mx_jail_member(guild, member, reason, bot.user)
+            if err_text:
+                return err_text
+        return None
     except Exception as e:
-        return FailedView(str(e))
+        return str(e)
+
+
+async def mx_dm(ctx, member, text: str):
+    if not mx_can(ctx.user, "manage_messages"):
+        return await mx_deny(ctx)
+    text = (text or "").strip()
+    if member.bot:
+        return await ctx.send(err("You can't DM a bot."), ephemeral=True)
+    if not text:
+        return await ctx.send(err("Message can't be empty."), ephemeral=True)
     try:
-        mark_action("ban", uid)
-        await guild.ban(user, reason=reason, delete_message_days=0)
+        await member.send(clip(f"**Message from {ctx.guild.name} staff:**\n{text}", 2000))
     except discord.Forbidden:
-        return FailedView("I don't have permission to ban that user.")
-    except Exception as e:
-        return FailedView(str(e))
-    await log_mod(guild, "Hackban", moderator, user, reason)
-    return BanResultView(user, reason)
+        return await ctx.send(err(f"{member.mention} has their DMs closed."), ephemeral=True)
+    await ctx.send(ok("DM Sent", f"**To:** {member.mention}\n**Message:** {clip(text, 500)}"))
+    await log_mod(ctx.guild, "DM", ctx.user, member, clip(text, 300))
 
 
-async def act_massban(guild, moderator, ids, reason):
-    ids = list(dict.fromkeys(ids))[:MASSBAN_MAX]
-    if not ids:
-        return FailedView("Provide at least one user ID or mention.")
-    done = []
-    failed = []
-    for uid in ids:
-        member = guild.get_member(uid)
-        if mod_can_target(guild, moderator, member or discord.Object(id=uid)):
-            failed.append(uid)
+async def mx_roleall(ctx, action: str, role, target: str = "humans"):
+    if not mx_can(ctx.user, "manage_roles"):
+        return await mx_deny(ctx)
+    problem = mx_role_error(ctx.guild, ctx.user, role)
+    if problem:
+        return await ctx.send(err(problem), ephemeral=True)
+    adding = action == "add"
+    members = ctx.guild.members
+    if target == "humans":
+        members = [m for m in members if not m.bot]
+    elif target == "bots":
+        members = [m for m in members if m.bot]
+    todo = [m for m in members if (role not in m.roles) == adding]
+    if not todo:
+        return await ctx.send(err(f"Nobody needs {role.mention} {'added' if adding else 'removed'}."), ephemeral=True)
+    await ctx.working(f"{'Adding' if adding else 'Removing'} {role.mention} for {len(todo)} member(s)...")
+    done = failed = 0
+    for m in todo:
+        try:
+            if adding:
+                await m.add_roles(role, reason=f"Role all by {ctx.user}")
+            else:
+                await m.remove_roles(role, reason=f"Role all by {ctx.user}")
+            done += 1
+        except Exception:
+            failed += 1
+        await asyncio.sleep(0.4)
+    await ctx.send(ok("Role All Complete", f"**Role:** {role.mention}\n**Action:** {action}\n**Target:** {target}\n**Success:** {done}\n**Failed:** {failed}"))
+    await log_mod(ctx.guild, "Role All", ctx.user, None, None, f"**Role:** {role.mention}\n**Action:** {action} ({done} ok, {failed} failed)")
+
+
+async def mx_massrole(ctx, action: str, role, members: list):
+    if not mx_can(ctx.user, "manage_roles"):
+        return await mx_deny(ctx)
+    problem = mx_role_error(ctx.guild, ctx.user, role)
+    if problem:
+        return await ctx.send(err(problem), ephemeral=True)
+    if not members:
+        return await ctx.send(err("No valid members provided."), ephemeral=True)
+    adding = action == "add"
+    await ctx.working(f"{'Adding' if adding else 'Removing'} {role.mention} for {len(members)} member(s)...")
+    done = failed = 0
+    for m in members[:200]:
+        try:
+            if adding:
+                await m.add_roles(role, reason=f"Mass role by {ctx.user}")
+            else:
+                await m.remove_roles(role, reason=f"Mass role by {ctx.user}")
+            done += 1
+        except Exception:
+            failed += 1
+        await asyncio.sleep(0.4)
+    await ctx.send(ok("Mass Role Complete", f"**Role:** {role.mention}\n**Action:** {action}\n**Success:** {done}\n**Failed:** {failed}"))
+    await log_mod(ctx.guild, "Mass Role", ctx.user, None, None, f"**Role:** {role.mention}\n**Action:** {action} ({done} ok, {failed} failed)")
+
+
+async def mx_giverole(ctx, member, role):
+    if not mx_can(ctx.user, "manage_roles"):
+        return await mx_deny(ctx)
+    problem = mx_role_error(ctx.guild, ctx.user, role)
+    if problem:
+        return await ctx.send(err(problem), ephemeral=True)
+    if role in member.roles:
+        return await ctx.send(err(f"{member.mention} already has {role.mention}."), ephemeral=True)
+    await member.add_roles(role, reason=f"Given by {ctx.user}")
+    await ctx.send(ok("Role Given", f"**Member:** {member.mention}\n**Role:** {role.mention}"))
+
+
+async def mx_role(ctx, action: str, role=None, name: str = None, color: str = None, member=None):
+    if not mx_can(ctx.user, "manage_roles"):
+        return await mx_deny(ctx)
+    guild = ctx.guild
+    if action == "create":
+        if not name:
+            return await ctx.send(err("Provide a name for the new role."), ephemeral=True)
+        colour = mx_color(color) if color else discord.Colour.default()
+        if colour is None:
+            return await ctx.send(err("Invalid color. Use a hex like `#ff0000`."), ephemeral=True)
+        created = await guild.create_role(name=name[:100], colour=colour, reason=f"Created by {ctx.user}")
+        return await ctx.send(ok("Role Created", f"**Role:** {created.mention}\n**ID:** `{created.id}`"))
+    if role is None:
+        return await ctx.send(err("Provide a role."), ephemeral=True)
+    problem = mx_role_error(guild, ctx.user, role)
+    if problem:
+        return await ctx.send(err(problem), ephemeral=True)
+    if action == "delete":
+        label = role.name
+        await role.delete(reason=f"Deleted by {ctx.user}")
+        return await ctx.send(ok("Role Deleted", f"**Role:** {label}"))
+    if action == "rename":
+        if not name:
+            return await ctx.send(err("Provide the new name."), ephemeral=True)
+        old = role.name
+        await role.edit(name=name[:100], reason=f"Renamed by {ctx.user}")
+        return await ctx.send(ok("Role Renamed", f"**Before:** {old}\n**After:** {role.mention}"))
+    if action == "color":
+        colour = mx_color(color)
+        if colour is None:
+            return await ctx.send(err("Invalid color. Use a hex like `#ff0000`."), ephemeral=True)
+        await role.edit(colour=colour, reason=f"Recolored by {ctx.user}")
+        return await ctx.send(ok("Role Color Changed", f"**Role:** {role.mention}\n**Color:** `#{str(color).lstrip('#').lower()}`"))
+    if action == "hoist":
+        state = not role.hoist
+        await role.edit(hoist=state, reason=f"Hoist toggled by {ctx.user}")
+        return await ctx.send(ok("Role Hoist Toggled", f"**Role:** {role.mention}\n**Hoisted:** {state}"))
+    if action == "mentionable":
+        state = not role.mentionable
+        await role.edit(mentionable=state, reason=f"Mentionable toggled by {ctx.user}")
+        return await ctx.send(ok("Role Mentionable Toggled", f"**Role:** {role.mention}\n**Mentionable:** {state}"))
+    if action in ("add", "remove"):
+        if member is None:
+            return await ctx.send(err("Provide a member."), ephemeral=True)
+        if action == "add":
+            await member.add_roles(role, reason=f"Added by {ctx.user}")
+        else:
+            await member.remove_roles(role, reason=f"Removed by {ctx.user}")
+        return await ctx.send(ok(f"Role {'Added' if action == 'add' else 'Removed'}", f"**Member:** {member.mention}\n**Role:** {role.mention}"))
+    await ctx.send(err("Unknown role action."), ephemeral=True)
+
+
+async def mx_forcenick(ctx, member, nick):
+    if not mx_can(ctx.user, "manage_nicknames"):
+        return await mx_deny(ctx)
+    problem = mx_hier_error(ctx.guild, ctx.user, member)
+    if problem:
+        return await ctx.send(err(problem), ephemeral=True)
+    store = mx_cfg()["forcenick"]
+    if not nick or nick.lower() in ("off", "reset", "none"):
+        if str(member.id) not in store:
+            return await ctx.send(err(f"{member.mention} has no forced nickname."), ephemeral=True)
+        store.pop(str(member.id), None)
+        mx_save()
+        return await ctx.send(ok("Forced Nickname Removed", f"**Member:** {member.mention}"))
+    if len(nick) > 32:
+        return await ctx.send(err("Nicknames can be at most 32 characters."), ephemeral=True)
+    store[str(member.id)] = nick
+    mx_save()
+    await member.edit(nick=nick, reason=f"Forced nickname by {ctx.user}")
+    await ctx.send(ok("Nickname Forced", f"**Member:** {member.mention}\n**Nickname:** {nick}"))
+    await log_mod(ctx.guild, "Force Nick", ctx.user, member, None, f"**Nickname:** {nick}")
+
+
+async def mx_honeypot(ctx, action: str, channel=None, punishment: str = "ban"):
+    if not mx_can(ctx.user, "manage_guild"):
+        return await mx_deny(ctx)
+    cfg = mx_cfg()
+    if action == "off":
+        if not cfg["honeypot"]:
+            return await ctx.send(err("No honeypot is set."), ephemeral=True)
+        cfg["honeypot"] = {}
+        mx_save()
+        return await ctx.send(ok("Honeypot Disabled", "The honeypot channel has been removed."))
+    if action == "status":
+        hp = cfg["honeypot"]
+        if not hp:
+            return await ctx.send(ok("Honeypot", "No honeypot is set."))
+        return await ctx.send(ok("Honeypot", f"**Channel:** <#{hp['channel']}>\n**Punishment:** {hp['punishment']}"))
+    if channel is None:
+        return await ctx.send(err("Provide a channel."), ephemeral=True)
+    if punishment not in MX_PUNISHMENTS:
+        return await ctx.send(err(f"Punishment must be one of: {', '.join(MX_PUNISHMENTS)}."), ephemeral=True)
+    cfg["honeypot"] = {"channel": channel.id, "punishment": punishment}
+    mx_save()
+    try:
+        await channel.send(f"🍯 **Do not write in this channel.** Anyone who sends a message here will be punished automatically ({punishment}).")
+    except Exception:
+        pass
+    await ctx.send(ok("Honeypot Set", f"**Channel:** {channel.mention}\n**Punishment:** {punishment}\nStaff are exempt."))
+
+
+async def mx_ignored(ctx, action: str, channel=None):
+    if not mx_can(ctx.user, "manage_guild"):
+        return await mx_deny(ctx)
+    ids = mx_cfg()["ignored"]
+    if action == "list":
+        text = "\n".join(f"<#{i}>" for i in ids) or "No ignored channels."
+        return await ctx.send(ok("Ignored Channels", text))
+    if channel is None:
+        return await ctx.send(err("Provide a channel."), ephemeral=True)
+    if action == "add":
+        if channel.id in ids:
+            return await ctx.send(err("That channel is already ignored."), ephemeral=True)
+        ids.append(channel.id)
+        mx_save()
+        return await ctx.send(ok("Channel Ignored", f"Commands are now ignored in {channel.mention} (admins excluded)."))
+    if channel.id not in ids:
+        return await ctx.send(err("That channel isn't ignored."), ephemeral=True)
+    ids.remove(channel.id)
+    mx_save()
+    await ctx.send(ok("Channel Restored", f"Commands work again in {channel.mention}."))
+
+
+async def mx_jail_setup(ctx):
+    if not mx_can(ctx.user, "administrator"):
+        return await mx_deny(ctx)
+    guild = ctx.guild
+    await ctx.working("Setting up the jail role and channel...")
+    cfg = mx_cfg()["jail_cfg"]
+    role = guild.get_role(cfg.get("role", 0))
+    if role is None:
+        role = await guild.create_role(name="Jailed", permissions=discord.Permissions.none(), colour=discord.Colour.dark_grey(), reason="Jail setup")
+    channel = guild.get_channel(cfg.get("channel", 0))
+    if channel is None:
+        overwrites = {
+            guild.default_role: discord.PermissionOverwrite(view_channel=False),
+            role: discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True),
+            guild.me: discord.PermissionOverwrite(view_channel=True, send_messages=True),
+        }
+        channel = await guild.create_text_channel("jail", overwrites=overwrites, reason="Jail setup")
+    for ch in guild.channels:
+        if ch.id == channel.id:
             continue
         try:
-            mark_action("ban", uid)
-            await guild.ban(discord.Object(id=uid), reason=reason, delete_message_days=0)
-            done.append(uid)
-            record_case("Ban", moderator, discord.Object(id=uid), reason)
-        except Exception:
-            failed.append(uid)
-        await asyncio.sleep(0.5)
-    await log_mod(
-        guild, "Massban", moderator, None, reason,
-        f"**Banned:** {len(done)}\n**Failed:** {len(failed)}\n**IDs:** {clip(' '.join(str(i) for i in done) or 'None', 600)}",
-    )
-    return InfoView(
-        "🔨 Mass Ban Complete",
-        f"**Banned:** {len(done)}\n**Failed:** {len(failed)}\n**Reason:** {reason}",
-        discord.Color.red(),
-    )
-
-
-def swap_channel_id(obj, old: int, new: int) -> bool:
-    changed = False
-    if isinstance(obj, dict):
-        for k, v in obj.items():
-            if isinstance(v, int) and not isinstance(v, bool) and v == old:
-                obj[k] = new
-                changed = True
-            elif isinstance(v, (dict, list)):
-                changed = swap_channel_id(v, old, new) or changed
-    elif isinstance(obj, list):
-        for i, v in enumerate(obj):
-            if isinstance(v, int) and not isinstance(v, bool) and v == old:
-                obj[i] = new
-                changed = True
-            elif isinstance(v, (dict, list)):
-                changed = swap_channel_id(v, old, new) or changed
-    return changed
-
-
-async def do_nuke(channel, moderator):
-    guild = channel.guild
-    position = channel.position
-    reason = f"Nuked by {moderator}"
-    new = await channel.clone(reason=reason)
-    await channel.delete(reason=reason)
-    try:
-        await new.edit(position=position)
-    except Exception:
-        pass
-    if swap_channel_id(config, channel.id, new.id):
-        save_config(config)
-    await log_mod(guild, "Nuke", moderator, new)
-    await new.send(view=InfoView("💥 Channel Nuked", f"This channel was nuked by {moderator.mention}.", discord.Color.orange()))
-    return new
-
-
-class NukeConfirmView(discord.ui.LayoutView):
-    def __init__(self, author_id: int, channel):
-        super().__init__(timeout=60)
-        self.author_id = author_id
-        self.channel = channel
-        yes = discord.ui.Button(label="Nuke", style=discord.ButtonStyle.danger)
-        no = discord.ui.Button(label="Cancel", style=discord.ButtonStyle.secondary)
-        yes.callback = self.on_yes
-        no.callback = self.on_no
-        self.add_item(
-            discord.ui.Container(
-                discord.ui.TextDisplay("# 💥 Nuke Channel"),
-                discord.ui.Separator(),
-                discord.ui.TextDisplay(f"This will delete and recreate {channel.mention}. Every message in it will be lost. Continue?"),
-                accent_color=discord.Color.red(),
-            )
-        )
-        self.add_item(discord.ui.ActionRow(yes, no))
-
-    async def interaction_check(self, interaction: discord.Interaction) -> bool:
-        allowed = interaction.user.id == self.author_id
-        if not allowed:
-            await interaction.response.send_message("Only the moderator who ran this can use these buttons.", ephemeral=True)
-        return allowed
-
-    async def on_yes(self, interaction: discord.Interaction):
-        self.stop()
-        await interaction.response.edit_message(view=InfoView("💥 Nuking", "Working...", discord.Color.red()))
-        try:
-            await do_nuke(self.channel, interaction.user)
-        except discord.Forbidden:
-            await interaction.followup.send(view=FailedView("I don't have permission to nuke that channel."), ephemeral=True)
-        except Exception as e:
-            await interaction.followup.send(view=FailedView(str(e)), ephemeral=True)
-
-    async def on_no(self, interaction: discord.Interaction):
-        self.stop()
-        await interaction.response.edit_message(view=InfoView("Cancelled", "The nuke was cancelled.", discord.Color.greyple()))
-
-
-async def act_visibility(guild, moderator, channel, hidden: bool):
-    overwrite = channel.overwrites_for(guild.default_role)
-    overwrite.view_channel = False if hidden else True
-    try:
-        await channel.set_permissions(guild.default_role, overwrite=overwrite)
-    except discord.Forbidden:
-        return FailedView("I don't have permission to edit that channel.")
-    except Exception as e:
-        return FailedView(str(e))
-    await log_mod(guild, "Hide" if hidden else "Unhide", moderator, channel)
-    if hidden:
-        return InfoView("🙈 Channel Hidden", f"{channel.mention} is now hidden from everyone.", discord.Color.red())
-    return InfoView("👁️ Channel Unhidden", f"{channel.mention} is now visible to everyone.", discord.Color.green())
-
-
-async def act_warnreset(guild, moderator, member):
-    config.setdefault("warns", {})[str(member.id)] = []
-    save_config(config)
-    await log_mod(guild, "Clear Warns", moderator, member)
-    return WarnsCleared(member)
-
-
-def case_line(c) -> str:
-    return f"**#{c['id']}** · {c['type']} · <@{c['user_id']}> · <t:{c['timestamp']}:R>\n> {clip(c['reason'], 160)}"
-
-
-def case_find(case_id: int):
-    return next((c for c in config.get("cases", {}).get("items", []) if c["id"] == case_id), None)
-
-
-def case_view_one(case_id: int):
-    c = case_find(case_id)
-    if not c:
-        return FailedView("Case not found.")
-    mod = f"<@{c['moderator_id']}>" if c.get("moderator_id") else "Unknown"
-    body = (
-        f"**Type:** {c['type']}\n"
-        f"**User:** <@{c['user_id']}> (`{c['user_id']}`)\n"
-        f"**Moderator:** {mod}\n"
-        f"**Date:** <t:{c['timestamp']}:F>\n"
-        f"**Reason:** {clip(c['reason'], 900)}"
-    )
-    return InfoView(f"📁 Case #{c['id']}", body, discord.Color.blurple())
-
-
-def case_list_view(user_id: int):
-    items = [c for c in config.get("cases", {}).get("items", []) if c["user_id"] == user_id]
-    if not items:
-        return InfoView("📁 Cases", f"No cases found for <@{user_id}>.")
-    lines = [case_line(c) for c in reversed(items[-15:])]
-    return InfoView(f"📁 Cases ({len(items)})", clip("\n".join(lines), 3800))
-
-
-def case_recent_view(amount: int):
-    amount = max(1, min(25, amount))
-    items = config.get("cases", {}).get("items", [])
-    if not items:
-        return InfoView("📁 Recent Cases", "No cases have been recorded yet.")
-    lines = [case_line(c) for c in reversed(items[-amount:])]
-    return InfoView("📁 Recent Cases", clip("\n".join(lines), 3800))
-
-
-async def case_set_reason(guild, moderator, case_id: int, reason: str):
-    c = case_find(case_id)
-    if not c:
-        return FailedView("Case not found.")
-    c["reason"] = clip(reason, 500)
-    save_config(config)
-    return ok("📁 Case Updated", f"Reason for case **#{case_id}** was updated.")
-
-
-def case_remove_one(case_id: int):
-    items = config.get("cases", {}).get("items", [])
-    c = case_find(case_id)
-    if not c:
-        return FailedView("Case not found.")
-    items.remove(c)
-    save_config(config)
-    return ok("📁 Case Removed", f"Case **#{case_id}** was removed.")
-
-
-def case_remove_user(user_id: int):
-    store = config.get("cases", {"items": []})
-    before = len(store["items"])
-    store["items"] = [c for c in store["items"] if c["user_id"] != user_id]
-    removed = before - len(store["items"])
-    save_config(config)
-    return ok("📁 Cases Removed", f"Removed **{removed}** case(s) for <@{user_id}>.")
-
-
-def ap_status_view():
-    cfg = ap_cfg()
-    channel = f"<#{cfg['channel_id']}>" if cfg["channel_id"] else "`Not set`"
-    state = "Enabled" if cfg["channel_id"] else "Disabled"
-    questions = "\n".join(f"{i}. {q}" for i, q in enumerate(cfg["questions"], 1))
-    body = (
-        f"**Status:** {state}\n"
-        f"**Channel:** {channel}\n"
-        f"**Window:** {cfg['window_days']} day(s) after a ban\n"
-        f"**Pending appeals:** {len(cfg['pending'])}\n\n"
-        f"**Questions**\n{questions}"
-    )
-    return InfoView("📨 Ban Appeals", body, discord.Color.blurple())
-
-
-def ap_set_channel(channel):
-    cfg = ap_cfg()
-    cfg["channel_id"] = channel.id
-    save_config(config)
-    return ok("📨 Appeals Channel Set", f"Appeals will be sent to {channel.mention}.")
-
-
-def ap_set_window(days: int):
-    if days < 1 or days > 365:
-        return FailedView("The window must be between 1 and 365 days.")
-    cfg = ap_cfg()
-    cfg["window_days"] = days
-    save_config(config)
-    return ok("📨 Appeal Window Set", f"Banned users can appeal for **{days}** day(s) after their ban.")
-
-
-def ap_set_questions(text: str):
-    questions = [q.strip() for q in re.split(r"\||\n", text) if q.strip()]
-    if not questions or len(questions) > 5:
-        return FailedView("Provide 1 to 5 questions separated by `|`.")
-    if any(len(q) > 45 for q in questions):
-        return FailedView("Each question must be 45 characters or less.")
-    cfg = ap_cfg()
-    cfg["questions"] = questions
-    save_config(config)
-    return ok("📨 Appeal Questions Set", "\n".join(f"{i}. {q}" for i, q in enumerate(questions, 1)))
-
-
-class AppealModal(discord.ui.Modal):
-    def __init__(self, questions):
-        super().__init__(title="Ban Appeal", timeout=900)
-        self.questions = questions
-        self.fields = []
-        for q in questions:
-            field = discord.ui.TextInput(label=q[:45], style=discord.TextStyle.paragraph, max_length=900)
-            self.fields.append(field)
-            self.add_item(field)
-
-    async def on_submit(self, interaction: discord.Interaction):
-        guild = bot.get_guild(GUILD_ID)
-        cfg = ap_cfg()
-        channel = guild.get_channel(cfg["channel_id"]) if guild and cfg["channel_id"] else None
-        if channel is None:
-            await interaction.response.send_message("Appeals are not available right now.", ephemeral=True)
-            return
-        embed = discord.Embed(
-            title="📨 New Ban Appeal",
-            description=f"**User:** {interaction.user.mention} (`{interaction.user.id}`)",
-            color=discord.Color.blurple(),
-            timestamp=discord.utils.utcnow(),
-        )
-        embed.set_thumbnail(url=interaction.user.display_avatar.url)
-        for q, f in zip(self.questions, self.fields):
-            embed.add_field(name=q[:256], value=f.value[:1024], inline=False)
-        decision = discord.ui.View(timeout=None)
-        decision.add_item(AppealDecision("accept", interaction.user.id))
-        decision.add_item(AppealDecision("deny", interaction.user.id))
-        await channel.send(embed=embed, view=decision, allowed_mentions=NO_MENTIONS)
-        cfg["pending"].append(str(interaction.user.id))
-        save_config(config)
-        await interaction.response.send_message("Your appeal was submitted. Staff will review it.", ephemeral=True)
-
-
-class AppealStartView(discord.ui.View):
-    def __init__(self):
-        super().__init__(timeout=None)
-
-    @discord.ui.button(label="Appeal Ban", style=discord.ButtonStyle.primary, custom_id="appeal:start")
-    async def start(self, interaction: discord.Interaction, button: discord.ui.Button):
-        cfg = ap_cfg()
-        uid = str(interaction.user.id)
-        banned_at = cfg["bans"].get(uid)
-        if not cfg["channel_id"] or banned_at is None:
-            await interaction.response.send_message("Appeals are not available for you.", ephemeral=True)
-            return
-        if time.time() - banned_at > cfg["window_days"] * 86400:
-            await interaction.response.send_message("The appeal window for your ban has closed.", ephemeral=True)
-            return
-        if uid in cfg["pending"]:
-            await interaction.response.send_message("You already have a pending appeal.", ephemeral=True)
-            return
-        guild = bot.get_guild(GUILD_ID)
-        try:
-            await guild.fetch_ban(discord.Object(id=interaction.user.id))
-        except discord.NotFound:
-            await interaction.response.send_message("You are not banned from the server.", ephemeral=True)
-            return
+            await ch.set_permissions(role, view_channel=False, send_messages=False, connect=False, speak=False, reason="Jail setup")
         except Exception:
             pass
-        await interaction.response.send_modal(AppealModal(cfg["questions"]))
+        await asyncio.sleep(0.3)
+    cfg["role"] = role.id
+    cfg["channel"] = channel.id
+    mx_save()
+    await ctx.send(ok("Jail Ready", f"**Role:** {role.mention}\n**Channel:** {channel.mention}\nJailed members only see the jail channel."))
 
 
-class AppealDecision(discord.ui.DynamicItem[discord.ui.Button], template=r"appeal:(?P<act>accept|deny):(?P<uid>\d+)"):
-    def __init__(self, act: str, uid: int):
-        super().__init__(
-            discord.ui.Button(
-                label="Accept" if act == "accept" else "Deny",
-                style=discord.ButtonStyle.success if act == "accept" else discord.ButtonStyle.danger,
-                custom_id=f"appeal:{act}:{uid}",
-            )
-        )
-        self.act = act
-        self.uid = int(uid)
-
-    @classmethod
-    async def from_custom_id(cls, interaction: discord.Interaction, item: discord.ui.Button, match):
-        return cls(match["act"], int(match["uid"]))
-
-    async def callback(self, interaction: discord.Interaction):
-        guild = bot.get_guild(GUILD_ID)
-        if guild is None or not interaction.user.guild_permissions.ban_members:
-            await interaction.response.send_message("You need Ban Members to decide appeals.", ephemeral=True)
-            return
-        cfg = ap_cfg()
-        accepted = self.act == "accept"
-        try:
-            user = await bot.fetch_user(self.uid)
-        except Exception:
-            user = None
-        note = ""
-        if accepted:
-            try:
-                mark_action("unban", self.uid)
-                await guild.unban(discord.Object(id=self.uid), reason=f"Appeal accepted by {interaction.user}")
-                await log_mod(guild, "Unban", interaction.user, user or discord.Object(id=self.uid), "Appeal accepted")
-            except discord.NotFound:
-                note = "\nThe user was not banned."
-            except Exception as e:
-                await interaction.response.send_message(view=FailedView(str(e)), ephemeral=True)
-                return
-        if str(self.uid) in cfg["pending"]:
-            cfg["pending"].remove(str(self.uid))
-        save_config(config)
-        embed = interaction.message.embeds[0] if interaction.message.embeds else discord.Embed(title="📨 Ban Appeal")
-        embed.color = discord.Color.green() if accepted else discord.Color.red()
-        embed.add_field(name="Decision", value=f"{'Accepted' if accepted else 'Denied'} by {interaction.user.mention}{note}", inline=False)
-        await interaction.response.edit_message(embed=embed, view=None)
-        if user is not None:
-            try:
-                await user.send(
-                    embed=discord.Embed(
-                        title=f"Your ban appeal in {guild.name}",
-                        description="Your appeal was **accepted**. You can rejoin the server." if accepted else "Your appeal was **denied**.",
-                        color=discord.Color.green() if accepted else discord.Color.red(),
-                    )
-                )
-            except Exception:
-                pass
-
-
-async def appeal_notify(guild, user, reason):
-    cfg = ap_cfg()
-    if not cfg["channel_id"]:
-        return
-    try:
-        embed = discord.Embed(
-            title=f"You were banned from {guild.name}",
-            description=f"**Reason:** {clip(reason or 'No reason provided', 500)}\n\nYou can appeal within {cfg['window_days']} day(s) using the button below.",
-            color=discord.Color.red(),
-        )
-        await user.send(embed=embed, view=AppealStartView())
-    except Exception:
-        pass
-
-
-def pf_uid(message, args, index=1):
-    if message.mentions:
-        return message.mentions[0].id
-    if len(args) > index:
-        m = ID_RE.fullmatch(args[index].strip("<@!>"))
-        if m:
-            return int(m.group())
+async def mx_jail_member(guild, member, reason: str, actor):
+    cfg = mx_cfg()
+    role = guild.get_role(cfg["jail_cfg"].get("role", 0))
+    if role is None:
+        return "Jail isn't set up yet. Run the jail setup first."
+    if str(member.id) in cfg["jail"]:
+        return "That member is already jailed."
+    removable = [r for r in member.roles if not r.is_default() and not r.managed and r < guild.me.top_role]
+    keep = [r for r in member.roles if not r.is_default() and r not in removable]
+    await member.edit(roles=keep + [role], reason=f"Jailed: {reason}")
+    cfg["jail"][str(member.id)] = {"roles": [r.id for r in removable], "reason": reason, "by": getattr(actor, "id", 0), "t": int(time.time())}
+    mx_save()
     return None
 
 
-def pf_member(message, args, index=1):
-    uid = pf_uid(message, args, index)
-    return message.guild.get_member(uid) if uid else None
+async def mx_jail(ctx, member, reason: str = "No reason provided"):
+    if not mx_can(ctx.user, "moderate_members", "manage_roles"):
+        return await mx_deny(ctx)
+    problem = mx_hier_error(ctx.guild, ctx.user, member)
+    if problem:
+        return await ctx.send(err(problem), ephemeral=True)
+    failure = await mx_jail_member(ctx.guild, member, reason, ctx.user)
+    if failure:
+        return await ctx.send(err(failure), ephemeral=True)
+    await ctx.send(ok("Member Jailed", f"**Member:** {member.mention}\n**Reason:** {reason}"))
+    await log_mod(ctx.guild, "Jail", ctx.user, member, reason)
 
 
-def pf_duration_reason(tokens, default):
-    if tokens and DUR_RE.fullmatch(tokens[0].lower()):
-        return dur_seconds(tokens[0]), " ".join(tokens[1:]) or "No reason provided"
-    return default, " ".join(tokens) or "No reason provided"
+async def mx_unjail(ctx, member):
+    if not mx_can(ctx.user, "moderate_members", "manage_roles"):
+        return await mx_deny(ctx)
+    cfg = mx_cfg()
+    entry = cfg["jail"].get(str(member.id))
+    if entry is None:
+        return await ctx.send(err(f"{member.mention} isn't jailed."), ephemeral=True)
+    guild = ctx.guild
+    jail_role = guild.get_role(cfg["jail_cfg"].get("role", 0))
+    restored = [guild.get_role(i) for i in entry["roles"]]
+    restored = [r for r in restored if r is not None and r < guild.me.top_role]
+    remaining = [r for r in member.roles if not r.is_default() and r != jail_role]
+    await member.edit(roles=remaining + [r for r in restored if r not in remaining], reason=f"Unjailed by {ctx.user}")
+    cfg["jail"].pop(str(member.id), None)
+    mx_save()
+    await ctx.send(ok("Member Released", f"**Member:** {member.mention}\n**Roles restored:** {len(restored)}"))
+    await log_mod(ctx.guild, "Unjail", ctx.user, member)
 
 
-async def mod_prefix(message, cmd, args) -> bool:
-    if cmd not in MOD_PREFIX_CMDS:
-        return False
-    guild = message.guild
-    author = message.author
-    perms = author.guild_permissions
-    send = message.channel.send
-    if cmd in ("mute", "unmute"):
-        if not perms.moderate_members:
-            return True
-        member = pf_member(message, args)
+async def mx_masspurge(ctx, user, limit: int = 100):
+    if not mx_can(ctx.user, "manage_messages"):
+        return await mx_deny(ctx)
+    limit = clamp(limit, 1, 1000)
+    await ctx.working(f"Deleting messages from {fmt_ref(user)} across all channels...")
+    total = 0
+    channels = 0
+    me = ctx.guild.me
+    for ch in ctx.guild.text_channels:
+        perms = ch.permissions_for(me)
+        if not (perms.view_channel and perms.read_message_history and perms.manage_messages):
+            continue
+        try:
+            deleted = await ch.purge(limit=limit, check=lambda m: m.author.id == user.id, bulk=True)
+        except Exception:
+            continue
+        if deleted:
+            total += len(deleted)
+            channels += 1
+        await asyncio.sleep(0.5)
+    await ctx.send(ok("Mass Purge Complete", f"**User:** {fmt_ref(user)}\n**Deleted:** {total} message(s)\n**Channels:** {channels}\n**Scanned per channel:** {limit}"))
+    await log_mod(ctx.guild, "Mass Purge", ctx.user, user, None, f"**Deleted:** {total} message(s) in {channels} channel(s)")
+
+
+def mx_staff_role_ids(guild) -> list:
+    ids = set(mx_cfg()["staffroles"])
+    for r in guild.roles:
+        if r.is_default() or r.managed:
+            continue
+        if r.permissions.administrator or r.permissions.manage_messages:
+            ids.add(r.id)
+    return list(ids)
+
+
+def mx_thread_user(channel_id: int):
+    for uid, cid in mx_cfg()["modmail"].get("threads", {}).items():
+        if cid == channel_id:
+            return int(uid)
+    return None
+
+
+async def mx_modmail(ctx, action: str, category=None, text: str = None, member=None):
+    cfg = mx_cfg()["modmail"]
+    guild = ctx.guild
+    if action in ("setup", "off", "block", "unblock", "status"):
+        if not mx_can(ctx.user, "manage_guild"):
+            return await mx_deny(ctx)
+    elif not mx_can(ctx.user, "manage_messages"):
+        return await mx_deny(ctx)
+    if action == "setup":
+        if category is None:
+            return await ctx.send(err("Provide a category for ModMail threads."), ephemeral=True)
+        cfg["enabled"] = True
+        cfg["category_id"] = category.id
+        cfg.setdefault("threads", {})
+        cfg.setdefault("blocked", [])
+        mx_save()
+        return await ctx.send(ok("ModMail Enabled", f"Threads will be created in **{category.name}**.\nMembers DM me to open a thread."))
+    if action == "off":
+        cfg["enabled"] = False
+        mx_save()
+        return await ctx.send(ok("ModMail Disabled", "DMs will no longer be relayed to staff."))
+    if action == "status":
+        cat = guild.get_channel(cfg.get("category_id", 0))
+        body = (
+            f"**Enabled:** {bool(cfg.get('enabled'))}\n"
+            f"**Category:** {cat.name if cat else 'Not set'}\n"
+            f"**Open threads:** {len(cfg.get('threads', {}))}\n"
+            f"**Blocked users:** {len(cfg.get('blocked', []))}"
+        )
+        return await ctx.send(ok("ModMail", body))
+    if action in ("block", "unblock"):
         if member is None:
-            usage = "`.mute @user [duration] [reason]`" if cmd == "mute" else "`.unmute @user`"
-            await send(view=FailedView(f"Usage: {usage}"))
+            return await ctx.send(err("Provide a member."), ephemeral=True)
+        blocked = cfg.setdefault("blocked", [])
+        if action == "block":
+            if member.id not in blocked:
+                blocked.append(member.id)
+        elif member.id in blocked:
+            blocked.remove(member.id)
+        mx_save()
+        return await ctx.send(ok(f"ModMail {'Blocked' if action == 'block' else 'Unblocked'}", f"**Member:** {member.mention}"))
+    uid = mx_thread_user(ctx.channel.id)
+    if uid is None:
+        return await ctx.send(err("Use this inside a ModMail thread channel."), ephemeral=True)
+    try:
+        user = await bot.fetch_user(uid)
+    except Exception:
+        user = None
+    if action == "reply":
+        text = (text or "").strip()
+        if not text:
+            return await ctx.send(err("Provide a reply message."), ephemeral=True)
+        if user is None:
+            return await ctx.send(err("I can't find that user anymore."), ephemeral=True)
+        try:
+            await user.send(clip(f"**{ctx.user.display_name} (Staff):** {text}", 2000))
+        except discord.Forbidden:
+            return await ctx.send(err("That user has their DMs closed."), ephemeral=True)
+        return await ctx.send(mx_card(f"✉️ Reply from {ctx.user.display_name}", text, discord.Color.green()))
+    if action == "close":
+        reason = (text or "").strip() or "No reason provided"
+        if user is not None:
+            try:
+                await user.send(f"📪 Your ModMail thread in **{guild.name}** was closed.\n**Reason:** {clip(reason, 500)}")
+            except Exception:
+                pass
+        cfg.get("threads", {}).pop(str(uid), None)
+        mx_save()
+        await ctx.send(ok("Thread Closed", f"Closed by {ctx.user.mention}. This channel will be deleted shortly."))
+        await log_mod(guild, "ModMail", ctx.user, user, reason, "**Thread closed**")
+        await asyncio.sleep(4)
+        try:
+            await ctx.channel.delete(reason=f"ModMail closed by {ctx.user}")
+        except Exception:
+            pass
+        return
+    await ctx.send(err("Unknown ModMail action."), ephemeral=True)
+
+
+async def mx_modmail_dm(message) -> bool:
+    cfg = mx_cfg()["modmail"]
+    if not cfg.get("enabled"):
+        return False
+    guild = bot.get_guild(GUILD_ID)
+    if guild is None:
+        return False
+    member = guild.get_member(message.author.id)
+    if member is None:
+        return False
+    if member.id in cfg.get("blocked", []):
+        try:
+            await message.channel.send("You are blocked from using ModMail.")
+        except Exception:
+            pass
+        return True
+    category = guild.get_channel(cfg.get("category_id", 0))
+    threads = cfg.setdefault("threads", {})
+    channel = guild.get_channel(threads.get(str(member.id), 0))
+    created = False
+    if channel is None:
+        overwrites = {
+            guild.default_role: discord.PermissionOverwrite(view_channel=False),
+            guild.me: discord.PermissionOverwrite(view_channel=True, send_messages=True, manage_channels=True, read_message_history=True),
+        }
+        for rid in mx_staff_role_ids(guild):
+            role = guild.get_role(rid)
+            if role is not None:
+                overwrites[role] = discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True)
+        slug = re.sub(r"[^a-z0-9-]", "", member.name.lower())[:20] or "user"
+        try:
+            channel = await guild.create_text_channel(
+                f"modmail-{slug}",
+                category=category if isinstance(category, discord.CategoryChannel) else None,
+                overwrites=overwrites,
+                topic=f"ModMail thread with {member} ({member.id})",
+                reason="ModMail thread opened"
+            )
+        except Exception as e:
+            print(f"ModMail channel creation failed: {e}")
             return True
-        if cmd == "mute":
-            seconds, reason = pf_duration_reason(args[2:], 600)
-            await send(view=await act_mute(guild, author, member, seconds, reason))
-        else:
-            await send(view=await act_unmute(guild, author, member))
-    elif cmd == "tempban":
-        if not perms.ban_members:
-            return True
-        uid = pf_uid(message, args)
-        if uid is None or len(args) < 3 or not DUR_RE.fullmatch(args[2].lower()):
-            await send(view=FailedView("Usage: `.tempban @user <duration> [reason]`"))
-            return True
-        reason = " ".join(args[3:]) or "No reason provided"
-        await send(view=await act_tempban(guild, author, uid, dur_seconds(args[2]), reason))
-    elif cmd == "hackban":
-        if not perms.ban_members:
-            return True
-        uid = pf_uid(message, args)
-        if uid is None:
-            await send(view=FailedView("Usage: `.hackban <userID> [reason]`"))
-            return True
-        reason = " ".join(args[2:]) or "No reason provided"
-        await send(view=await act_hackban(guild, author, uid, reason))
-    elif cmd == "massban":
-        if not perms.ban_members:
-            return True
-        ids = []
-        index = 1
-        while index < len(args):
-            m = ID_RE.fullmatch(args[index].strip("<@!>"))
-            if not m:
-                break
-            ids.append(int(m.group()))
-            index += 1
-        if not ids:
-            await send(view=FailedView("Usage: `.massban <id> <id> ... [reason]`"))
-            return True
-        reason = " ".join(args[index:]) or "No reason provided"
-        await send(view=await act_massban(guild, author, ids, reason))
-    elif cmd == "nuke":
-        if not perms.manage_channels:
-            return True
-        target = message.channel_mentions[0] if message.channel_mentions else message.channel
-        await send(view=NukeConfirmView(author.id, target))
-    elif cmd in ("hide", "unhide"):
-        if not perms.manage_channels:
-            return True
-        target = message.channel_mentions[0] if message.channel_mentions else message.channel
-        await send(view=await act_visibility(guild, author, target, cmd == "hide"))
-    elif cmd == "warninfo":
-        if not perms.moderate_members:
-            return True
-        member = message.mentions[0] if message.mentions else author
-        await send(view=WarnsListView(member, config.get("warns", {}).get(str(member.id), [])))
-    elif cmd == "warnreset":
-        if not perms.moderate_members:
-            return True
-        if not message.mentions:
-            await send(view=FailedView("Usage: `.warnreset @user`"))
-            return True
-        await send(view=await act_warnreset(guild, author, message.mentions[0]))
-    elif cmd == "case":
-        if not perms.moderate_members:
-            return True
-        sub = args[1].lower() if len(args) > 1 else ""
-        usage = "`.case view <id>` `.case list @user` `.case recent [amount]` `.case reason <id> <text>` `.case remove <id>` `.case removeall @user`"
-        if sub == "view" and len(args) > 2 and args[2].isdigit():
-            await send(view=case_view_one(int(args[2])))
-        elif sub == "list":
-            uid = pf_uid(message, args, 2)
-            if uid is None:
-                await send(view=FailedView(f"Usage: {usage}"))
-            else:
-                await send(view=case_list_view(uid))
-        elif sub == "recent":
-            amount = int(args[2]) if len(args) > 2 and args[2].isdigit() else 10
-            await send(view=case_recent_view(amount))
-        elif sub == "reason" and len(args) > 3 and args[2].isdigit():
-            await send(view=await case_set_reason(guild, author, int(args[2]), " ".join(args[3:])))
-        elif sub == "remove" and len(args) > 2 and args[2].isdigit():
-            if not perms.administrator:
-                return True
-            await send(view=case_remove_one(int(args[2])))
-        elif sub == "removeall":
-            if not perms.administrator:
-                return True
-            uid = pf_uid(message, args, 2)
-            if uid is None:
-                await send(view=FailedView(f"Usage: {usage}"))
-            else:
-                await send(view=case_remove_user(uid))
-        else:
-            await send(view=FailedView(f"Usage: {usage}"))
-    elif cmd == "appeals":
-        if not perms.manage_guild:
-            return True
-        sub = args[1].lower() if len(args) > 1 else "status"
-        usage = "`.appeals status` `.appeals channel #channel` `.appeals window <days>` `.appeals questions <q1 | q2 | q3>`"
-        if sub == "status":
-            await send(view=ap_status_view())
-        elif sub == "channel" and message.channel_mentions:
-            await send(view=ap_set_channel(message.channel_mentions[0]))
-        elif sub == "window" and len(args) > 2 and args[2].isdigit():
-            await send(view=ap_set_window(int(args[2])))
-        elif sub == "questions" and len(args) > 2:
-            await send(view=ap_set_questions(" ".join(args[2:])))
-        else:
-            await send(view=FailedView(f"Usage: {usage}"))
+        threads[str(member.id)] = channel.id
+        mx_save()
+        created = True
+        info = (
+            f"**User:** {fmt_ref(member)}\n"
+            f"**Account created:** <t:{int(member.created_at.timestamp())}:R>\n"
+            f"**Joined:** {('<t:' + str(int(member.joined_at.timestamp())) + ':R>') if member.joined_at else 'Unknown'}\n\n"
+            f"Reply with `{PREFIX}modmail reply <text>` or `/modmail`. Close with `{PREFIX}modmail close [reason]`."
+        )
+        await channel.send(view=mx_card("📩 New ModMail Thread", info, discord.Color.green()), allowed_mentions=MX_NO_MENTIONS)
+    body = message.content or ""
+    if message.attachments:
+        body += "\n" + "\n".join(a.url for a in message.attachments)
+    body = body.strip() or "*No text content*"
+    await channel.send(view=mx_card(f"💬 {member.display_name}", body, discord.Color.blurple()), allowed_mentions=MX_NO_MENTIONS)
+    try:
+        await message.add_reaction("✅")
+        if created:
+            await message.channel.send("📨 Your message was sent to the staff team. They'll reply here soon.")
+    except Exception:
+        pass
     return True
 
 
-async def slash_send(interaction: discord.Interaction, view):
-    failed = isinstance(view, FailedView)
-    if interaction.response.is_done():
-        await interaction.followup.send(view=view, ephemeral=failed)
+async def mx_modnote(ctx, action: str, user, text: str = None, number: int = None):
+    if not mx_can(ctx.user, "manage_messages", "moderate_members"):
+        return await mx_deny(ctx)
+    notes = mx_cfg()["modnotes"]
+    key = str(user.id)
+    if action == "add":
+        text = (text or "").strip()
+        if not text:
+            return await ctx.send(err("Provide the note text."), ephemeral=True)
+        notes.setdefault(key, []).append({"by": ctx.user.id, "text": clip(text, 500), "t": int(time.time())})
+        mx_save()
+        await ctx.send(ok("Note Added", f"**User:** {fmt_ref(user)}\n**Note:** {clip(text, 500)}"))
+        return await log_mod(ctx.guild, "Mod Note", ctx.user, user, clip(text, 300))
+    entries = notes.get(key, [])
+    if action == "view":
+        if not entries:
+            return await ctx.send(ok("Mod Notes", f"No notes for {fmt_ref(user)}."), ephemeral=True)
+        lines = [f"**{i}.** {n['text']}\n-# by <@{n['by']}> • <t:{n['t']}:R>" for i, n in enumerate(entries[-15:], start=max(1, len(entries) - 14))]
+        return await ctx.send(ok(f"Mod Notes — {len(entries)} total", f"**User:** {fmt_ref(user)}\n\n" + "\n".join(lines)), ephemeral=True)
+    if action == "remove":
+        if number is None or not 1 <= number <= len(entries):
+            return await ctx.send(err("Provide a valid note number."), ephemeral=True)
+        removed = entries.pop(number - 1)
+        if not entries:
+            notes.pop(key, None)
+        mx_save()
+        return await ctx.send(ok("Note Removed", f"**User:** {fmt_ref(user)}\n**Removed:** {removed['text']}"))
+    await ctx.send(err("Unknown modnote action."), ephemeral=True)
+
+
+async def mx_modstats(ctx, days: int = 7):
+    if not mx_can(ctx.user, "manage_messages", "moderate_members"):
+        return await mx_deny(ctx)
+    days = clamp(days, 1, 365)
+    cutoff = int(time.time()) - days * 86400
+    entries = [e for e in mx_cfg()["modlog"] if e["t"] >= cutoff]
+    if not entries:
+        return await ctx.send(ok("Moderation Stats", f"No moderation activity in the last {days} day(s)."))
+    by_action = Counter(e["a"] for e in entries)
+    by_mod = Counter(e["m"] for e in entries)
+    action_lines = "\n".join(f"**{a}:** {n}" for a, n in by_action.most_common(12))
+    mod_lines = "\n".join(f"<@{m}> — {n}" for m, n in by_mod.most_common(5))
+    await ctx.send(ok(f"Moderation Stats — {days} day(s)", f"**Total actions:** {len(entries)}\n\n{action_lines}\n\n**Top moderators**\n{mod_lines}"))
+
+
+async def mx_moveall(ctx, channel):
+    if not mx_can(ctx.user, "move_members"):
+        return await mx_deny(ctx)
+    voice = getattr(ctx.user, "voice", None)
+    if voice is None or voice.channel is None:
+        return await ctx.send(err("Join a voice channel first."), ephemeral=True)
+    source = voice.channel
+    if source.id == channel.id:
+        return await ctx.send(err("That's the channel you're already in."), ephemeral=True)
+    members = list(source.members)
+    await ctx.working(f"Moving {len(members)} member(s) to {channel.mention}...")
+    moved = failed = 0
+    for m in members:
+        try:
+            await m.move_to(channel, reason=f"Move all by {ctx.user}")
+            moved += 1
+        except Exception:
+            failed += 1
+    await ctx.send(ok("Move All Complete", f"**From:** {source.mention}\n**To:** {channel.mention}\n**Moved:** {moved}\n**Failed:** {failed}"))
+    await log_mod(ctx.guild, "Move All", ctx.user, None, None, f"**From:** {source.mention}\n**To:** {channel.mention}\n**Moved:** {moved}")
+
+
+async def mx_picperms(ctx, member, channel=None):
+    if not mx_can(ctx.user, "manage_roles", "manage_channels"):
+        return await mx_deny(ctx)
+    channel = channel or ctx.channel
+    problem = mx_hier_error(ctx.guild, ctx.user, member)
+    if problem:
+        return await ctx.send(err(problem), ephemeral=True)
+    ow = channel.overwrites_for(member)
+    blocked = ow.attach_files is False or ow.embed_links is False
+    if blocked:
+        ow.attach_files = None
+        ow.embed_links = None
     else:
-        await interaction.response.send_message(view=view, ephemeral=failed)
+        ow.attach_files = False
+        ow.embed_links = False
+    if ow.is_empty():
+        await channel.set_permissions(member, overwrite=None, reason=f"Pic perms by {ctx.user}")
+    else:
+        await channel.set_permissions(member, overwrite=ow, reason=f"Pic perms by {ctx.user}")
+    state = "restored" if blocked else "removed"
+    await ctx.send(ok("Pic Perms Toggled", f"**Member:** {member.mention}\n**Channel:** {channel.mention}\n**Images/links:** {state}"))
+    await log_mod(ctx.guild, "Pic Perms", ctx.user, member, None, f"**Channel:** {channel.mention}\n**Images/links:** {state}")
 
 
-async def slash_perm(interaction: discord.Interaction, perm: str) -> bool:
-    if getattr(interaction.user.guild_permissions, perm):
+def mx_emoji_norm(text: str) -> str:
+    return str(text).replace("\ufe0f", "")
+
+
+def mx_rr_role(entry, emoji) -> int:
+    target = mx_emoji_norm(emoji)
+    for key, rid in entry["map"].items():
+        if mx_emoji_norm(key) == target:
+            return rid
+    return 0
+
+
+def mx_parse_message_ref(text: str, default_channel_id: int):
+    m = re.search(r"/channels/\d+/(\d+)/(\d+)", text or "")
+    if m:
+        return int(m.group(1)), int(m.group(2))
+    if (text or "").isdigit():
+        return default_channel_id, int(text)
+    return None, None
+
+
+async def mx_reactionrole(ctx, action: str, message_ref: str = None, emoji: str = None, role=None, channel=None):
+    if not mx_can(ctx.user, "manage_roles"):
+        return await mx_deny(ctx)
+    store = mx_cfg()["reactionroles"]
+    if action == "list":
+        if not store:
+            return await ctx.send(ok("Reaction Roles", "No reaction roles are set."))
+        lines = []
+        for mid, entry in store.items():
+            pairs = ", ".join(f"{e} → <@&{r}>" for e, r in entry["map"].items())
+            lines.append(f"<#{entry['channel']}> `{mid}`: {pairs}")
+        return await ctx.send(ok("Reaction Roles", "\n".join(lines)))
+    default_channel = channel.id if channel else ctx.channel.id
+    channel_id, message_id = mx_parse_message_ref(message_ref, default_channel)
+    if message_id is None:
+        return await ctx.send(err("Provide a valid message ID or link."), ephemeral=True)
+    target_channel = ctx.guild.get_channel(channel_id)
+    if target_channel is None:
+        return await ctx.send(err("I can't find that channel."), ephemeral=True)
+    if not emoji:
+        return await ctx.send(err("Provide an emoji."), ephemeral=True)
+    partial = discord.PartialEmoji.from_str(emoji.strip())
+    key = mx_emoji_norm(partial)
+    if action == "add":
+        if role is None:
+            return await ctx.send(err("Provide a role."), ephemeral=True)
+        problem = mx_role_error(ctx.guild, ctx.user, role)
+        if problem:
+            return await ctx.send(err(problem), ephemeral=True)
+        try:
+            msg = await target_channel.fetch_message(message_id)
+        except Exception:
+            return await ctx.send(err("I can't find that message."), ephemeral=True)
+        try:
+            await msg.add_reaction(partial)
+        except Exception:
+            return await ctx.send(err("I couldn't add that emoji. Use a standard emoji or one from this server."), ephemeral=True)
+        entry = store.setdefault(str(message_id), {"channel": target_channel.id, "map": {}})
+        entry["map"][key] = role.id
+        mx_save()
+        return await ctx.send(ok("Reaction Role Added", f"**Message:** {msg.jump_url}\n**Emoji:** {key}\n**Role:** {role.mention}"))
+    if action == "remove":
+        entry = store.get(str(message_id))
+        if entry is None or not mx_rr_role(entry, key):
+            return await ctx.send(err("No reaction role found for that message and emoji."), ephemeral=True)
+        for existing in list(entry["map"]):
+            if mx_emoji_norm(existing) == key:
+                entry["map"].pop(existing, None)
+        if not entry["map"]:
+            store.pop(str(message_id), None)
+        mx_save()
+        return await ctx.send(ok("Reaction Role Removed", f"**Message ID:** `{message_id}`\n**Emoji:** {key}"))
+    await ctx.send(err("Unknown reaction role action."), ephemeral=True)
+
+
+async def mx_restrict(ctx, member):
+    if not mx_can(ctx.user, "manage_messages", "moderate_members"):
+        return await mx_deny(ctx)
+    problem = mx_hier_error(ctx.guild, ctx.user, member)
+    if problem:
+        return await ctx.send(err(problem), ephemeral=True)
+    ids = mx_cfg()["restricted"]
+    if member.id in ids:
+        ids.remove(member.id)
+        mx_save()
+        await ctx.send(ok("Member Unrestricted", f"{member.mention} can post images and add reactions again."))
+        return await log_mod(ctx.guild, "Unrestrict", ctx.user, member)
+    ids.append(member.id)
+    mx_save()
+    await ctx.send(ok("Member Restricted", f"{member.mention} can no longer post images or add reactions."))
+    await log_mod(ctx.guild, "Restrict", ctx.user, member)
+
+
+async def mx_softban(ctx, user, reason: str = "No reason provided"):
+    if not mx_can(ctx.user, "ban_members"):
+        return await mx_deny(ctx)
+    problem = mx_hier_error(ctx.guild, ctx.user, user)
+    if problem:
+        return await ctx.send(err(problem), ephemeral=True)
+    await ctx.defer()
+    mark_action("ban", user.id)
+    await ctx.guild.ban(user, reason=f"Softban by {ctx.user}: {reason}", delete_message_days=7)
+    mark_action("unban", user.id)
+    await ctx.guild.unban(user, reason="Softban")
+    await ctx.send(ok("Member Softbanned", f"**User:** {fmt_ref(user)}\n**Reason:** {reason}\nTheir last 7 days of messages were deleted."))
+    await log_mod(ctx.guild, "Softban", ctx.user, user, reason)
+
+
+async def mx_staffroles(ctx, action: str, role=None):
+    if not mx_can(ctx.user, "administrator"):
+        return await mx_deny(ctx)
+    ids = mx_cfg()["staffroles"]
+    if action == "list":
+        text = "\n".join(f"<@&{i}>" for i in ids) or "No staff roles set."
+        return await ctx.send(ok("Staff Roles", text + "\n\nThese roles are exempt from automod, honeypot and ModMail access."))
+    if role is None:
+        return await ctx.send(err("Provide a role."), ephemeral=True)
+    if action == "add":
+        if role.id in ids:
+            return await ctx.send(err("That role is already a staff role."), ephemeral=True)
+        ids.append(role.id)
+        mx_save()
+        await ctx.send(ok("Staff Role Added", f"{role.mention} is now exempt from automod."))
+        return await log_mod(ctx.guild, "Staff Roles", ctx.user, None, None, f"**Added:** {role.mention}")
+    if role.id not in ids:
+        return await ctx.send(err("That role isn't a staff role."), ephemeral=True)
+    ids.remove(role.id)
+    mx_save()
+    await ctx.send(ok("Staff Role Removed", f"{role.mention} is no longer exempt from automod."))
+    await log_mod(ctx.guild, "Staff Roles", ctx.user, None, None, f"**Removed:** {role.mention}")
+
+
+async def mx_stickyroles(ctx, action: str):
+    if not mx_can(ctx.user, "manage_guild"):
+        return await mx_deny(ctx)
+    cfg = mx_cfg()
+    if action == "status":
+        return await ctx.send(ok("Sticky Roles", f"**Enabled:** {cfg['sticky_on']}\n**Members saved:** {len(cfg['sticky'])}"))
+    cfg["sticky_on"] = action == "on"
+    if not cfg["sticky_on"]:
+        cfg["sticky"] = {}
+    mx_save()
+    await ctx.send(ok("Sticky Roles", "Roles will be re-applied when members rejoin." if cfg["sticky_on"] else "Sticky roles disabled and saved roles cleared."))
+
+
+def mx_suggest_view(n: int, author_id: int, text: str, status: str = "Pending", reviewer_id: int = None, reason: str = None):
+    colors = {"Pending": discord.Color.blurple(), "Approved": discord.Color.green(), "Denied": discord.Color.red()}
+    body = f"**From:** <@{author_id}>\n\n{clip(text, 1500)}\n\n**Status:** {status}"
+    if reviewer_id:
+        body += f"\n**Reviewed by:** <@{reviewer_id}>"
+    if reason:
+        body += f"\n**Reason:** {clip(reason, 500)}"
+    return mx_card(f"💡 Suggestion #{n}", body, colors.get(status, discord.Color.blurple()))
+
+
+async def mx_suggest(ctx, text: str):
+    cfg = mx_cfg()
+    channel = ctx.guild.get_channel(cfg["suggest"].get("channel", 0))
+    if channel is None:
+        return await ctx.send(err("The suggestions board isn't set up yet."), ephemeral=True)
+    text = (text or "").strip()
+    if not text:
+        return await ctx.send(err("Write your suggestion."), ephemeral=True)
+    cfg["suggest_id"] += 1
+    n = cfg["suggest_id"]
+    msg = await channel.send(view=mx_suggest_view(n, ctx.user.id, text), allowed_mentions=MX_NO_MENTIONS)
+    for emoji in ("👍", "👎"):
+        try:
+            await msg.add_reaction(emoji)
+        except Exception:
+            pass
+    cfg["suggestions"][str(n)] = {"message": msg.id, "channel": channel.id, "user": ctx.user.id, "text": clip(text, 1500), "status": "Pending"}
+    mx_save()
+    await ctx.send(ok("Suggestion Sent", f"Your suggestion **#{n}** was posted in {channel.mention}."), ephemeral=True)
+
+
+async def mx_suggestions(ctx, action: str, channel=None, number: int = None, reason: str = None):
+    cfg = mx_cfg()
+    if action in ("setup", "off", "status"):
+        if not mx_can(ctx.user, "manage_guild"):
+            return await mx_deny(ctx)
+    elif not mx_can(ctx.user, "manage_messages"):
+        return await mx_deny(ctx)
+    if action == "setup":
+        if channel is None:
+            return await ctx.send(err("Provide a channel."), ephemeral=True)
+        cfg["suggest"] = {"channel": channel.id}
+        mx_save()
+        return await ctx.send(ok("Suggestions Board Set", f"Suggestions will be posted in {channel.mention}. Members use `{PREFIX}suggest` or `/suggest`."))
+    if action == "off":
+        cfg["suggest"] = {}
+        mx_save()
+        return await ctx.send(ok("Suggestions Disabled", "The suggestions board was removed."))
+    if action == "status":
+        ch = cfg["suggest"].get("channel")
+        pending = sum(1 for s in cfg["suggestions"].values() if s["status"] == "Pending")
+        return await ctx.send(ok("Suggestions", f"**Channel:** {('<#' + str(ch) + '>') if ch else 'Not set'}\n**Total:** {len(cfg['suggestions'])}\n**Pending:** {pending}"))
+    if number is None or str(number) not in cfg["suggestions"]:
+        return await ctx.send(err("Provide a valid suggestion number."), ephemeral=True)
+    entry = cfg["suggestions"][str(number)]
+    status = "Approved" if action == "approve" else "Denied"
+    entry["status"] = status
+    mx_save()
+    ch = ctx.guild.get_channel(entry["channel"])
+    if ch is not None:
+        try:
+            msg = await ch.fetch_message(entry["message"])
+            await msg.edit(view=mx_suggest_view(number, entry["user"], entry["text"], status, ctx.user.id, reason))
+        except Exception:
+            pass
+    author = ctx.guild.get_member(entry["user"])
+    if author is not None:
+        try:
+            await author.send(f"💡 Your suggestion **#{number}** in **{ctx.guild.name}** was **{status.lower()}**." + (f"\n**Reason:** {clip(reason, 500)}" if reason else ""))
+        except Exception:
+            pass
+    await ctx.send(ok("Suggestion Reviewed", f"**Suggestion:** #{number}\n**Status:** {status}"))
+    await log_mod(ctx.guild, "Suggestion Review", ctx.user, None, reason, f"**Suggestion:** #{number} {status}")
+
+
+async def mx_extraowner(ctx, action: str, member=None):
+    if ctx.user.id != ctx.guild.owner_id:
+        return await ctx.send(err("Only the server owner can manage extra owners."), ephemeral=True)
+    ids = whitelist_ids()
+    if action == "list":
+        text = "\n".join(f"<@{i}>" for i in ids) or "No extra owners."
+        return await ctx.send(ok("Extra Owners", text))
+    if member is None:
+        return await ctx.send(err("Provide a member."), ephemeral=True)
+    if action == "add":
+        if member.id in ids:
+            return await ctx.send(err("That user already has owner-level access."), ephemeral=True)
+        ids.append(member.id)
+        save_config(config)
+        await ctx.send(ok("Extra Owner Added", f"{member.mention} now has owner-level access to Guild Protection."))
+        return await log_mod(ctx.guild, "Extra Owner", ctx.user, member, None, "**Added**")
+    if member.id not in ids:
+        return await ctx.send(err("That user isn't an extra owner."), ephemeral=True)
+    ids.remove(member.id)
+    save_config(config)
+    await ctx.send(ok("Extra Owner Removed", f"{member.mention} no longer has owner-level access."))
+    await log_mod(ctx.guild, "Extra Owner", ctx.user, member, None, "**Removed**")
+
+
+def mx_has_image(message) -> bool:
+    if message.attachments:
         return True
-    await interaction.response.send_message(view=FailedView("You don't have permission to use this command."), ephemeral=True)
+    return bool(MX_IMAGE_RE.search(message.content or ""))
+
+
+async def mx_message_hook(message) -> bool:
+    if message.guild is None:
+        return await mx_modmail_dm(message)
+    if message.guild.id != GUILD_ID:
+        return False
+    member = message.author
+    if not isinstance(member, discord.Member):
+        return False
+    cfg = mx_cfg()
+    hp = cfg["honeypot"]
+    if hp and message.channel.id == hp.get("channel") and not mx_exempt(member):
+        try:
+            await message.delete()
+        except Exception:
+            pass
+        reason = "Honeypot triggered"
+        failure = await mx_punish(message.guild, member, hp.get("punishment", "ban"), reason)
+        extra = f"**Action:** {hp.get('punishment', 'ban')}\n**Channel:** {message.channel.mention}"
+        if failure:
+            extra += f"\n**Failed:** {clip(failure, 200)}"
+        await log_mod(message.guild, "Honeypot", bot.user, member, reason, extra)
+        return True
+    if message.content.startswith(PREFIX) and message.channel.id in cfg["ignored"] and not mx_super(member):
+        return True
+    if member.id in cfg["restricted"] and mx_has_image(message):
+        try:
+            await message.delete()
+            sent = await message.channel.send(f"{member.mention} you are restricted from posting images.", allowed_mentions=discord.AllowedMentions(users=[member]))
+            asyncio.create_task(delete_after(sent, 5))
+        except Exception:
+            pass
+        return True
     return False
 
 
-@tree.command(name="mute", description="Timeout a member", guild=GUILD_OBJ)
-@discord.app_commands.describe(member="Member to mute", duration="Duration, e.g. 10m, 2h, 1d", reason="Reason for the mute")
-@discord.app_commands.default_permissions(moderate_members=True)
-async def mute_cmd(interaction: discord.Interaction, member: discord.Member, duration: str = "10m", reason: str = "No reason provided"):
-    if not await slash_perm(interaction, "moderate_members"):
-        return
-    await slash_send(interaction, await act_mute(interaction.guild, interaction.user, member, dur_seconds(duration), reason))
-
-
-@tree.command(name="unmute", description="Remove a timeout from a member", guild=GUILD_OBJ)
-@discord.app_commands.describe(member="Member to unmute")
-@discord.app_commands.default_permissions(moderate_members=True)
-async def unmute_cmd(interaction: discord.Interaction, member: discord.Member):
-    if not await slash_perm(interaction, "moderate_members"):
-        return
-    await slash_send(interaction, await act_unmute(interaction.guild, interaction.user, member))
-
-
-@tree.command(name="tempban", description="Temporarily ban a user", guild=GUILD_OBJ)
-@discord.app_commands.describe(user="User to ban", duration="Duration, e.g. 1h, 2d, 1d12h", reason="Reason for the ban")
-@discord.app_commands.default_permissions(ban_members=True)
-async def tempban_cmd(interaction: discord.Interaction, user: discord.User, duration: str, reason: str = "No reason provided"):
-    if not await slash_perm(interaction, "ban_members"):
-        return
-    await interaction.response.defer()
-    await slash_send(interaction, await act_tempban(interaction.guild, interaction.user, user.id, dur_seconds(duration), reason))
-
-
-@tree.command(name="hackban", description="Ban a user by ID even if they are not in the server", guild=GUILD_OBJ)
-@discord.app_commands.describe(user_id="ID of the user to ban", reason="Reason for the ban")
-@discord.app_commands.default_permissions(ban_members=True)
-async def hackban_cmd(interaction: discord.Interaction, user_id: str, reason: str = "No reason provided"):
-    if not await slash_perm(interaction, "ban_members"):
-        return
-    m = ID_RE.fullmatch(user_id.strip("<@!>").strip())
-    if not m:
-        await slash_send(interaction, FailedView("Invalid user ID."))
-        return
-    await interaction.response.defer()
-    await slash_send(interaction, await act_hackban(interaction.guild, interaction.user, int(m.group()), reason))
-
-
-@tree.command(name="massban", description="Ban multiple users at once", guild=GUILD_OBJ)
-@discord.app_commands.describe(users="User IDs or mentions separated by spaces or commas", reason="Reason for the bans")
-@discord.app_commands.default_permissions(ban_members=True)
-async def massban_cmd(interaction: discord.Interaction, users: str, reason: str = "No reason provided"):
-    if not await slash_perm(interaction, "ban_members"):
-        return
-    ids = [int(i) for i in ID_RE.findall(users)]
-    await interaction.response.defer()
-    await slash_send(interaction, await act_massban(interaction.guild, interaction.user, ids, reason))
-
-
-@tree.command(name="nuke", description="Delete all messages in a channel by recreating it", guild=GUILD_OBJ)
-@discord.app_commands.describe(channel="Channel to nuke (defaults to this channel)")
-@discord.app_commands.default_permissions(manage_channels=True)
-async def nuke_cmd(interaction: discord.Interaction, channel: discord.TextChannel = None):
-    if not await slash_perm(interaction, "manage_channels"):
-        return
-    target = channel or interaction.channel
-    await interaction.response.send_message(view=NukeConfirmView(interaction.user.id, target), ephemeral=True)
-
-
-@tree.command(name="hide", description="Hide a channel from everyone", guild=GUILD_OBJ)
-@discord.app_commands.describe(channel="Channel to hide (defaults to this channel)")
-@discord.app_commands.default_permissions(manage_channels=True)
-async def hide_cmd(interaction: discord.Interaction, channel: discord.TextChannel = None):
-    if not await slash_perm(interaction, "manage_channels"):
-        return
-    await slash_send(interaction, await act_visibility(interaction.guild, interaction.user, channel or interaction.channel, True))
-
-
-@tree.command(name="unhide", description="Unhide a channel", guild=GUILD_OBJ)
-@discord.app_commands.describe(channel="Channel to unhide (defaults to this channel)")
-@discord.app_commands.default_permissions(manage_channels=True)
-async def unhide_cmd(interaction: discord.Interaction, channel: discord.TextChannel = None):
-    if not await slash_perm(interaction, "manage_channels"):
-        return
-    await slash_send(interaction, await act_visibility(interaction.guild, interaction.user, channel or interaction.channel, False))
-
-
-@tree.command(name="warninfo", description="View warnings for a user", guild=GUILD_OBJ)
-@discord.app_commands.describe(member="Member to check (defaults to you)")
-@discord.app_commands.default_permissions(moderate_members=True)
-async def warninfo_cmd(interaction: discord.Interaction, member: discord.Member = None):
-    if not await slash_perm(interaction, "moderate_members"):
-        return
-    member = member or interaction.user
-    await slash_send(interaction, WarnsListView(member, config.get("warns", {}).get(str(member.id), [])))
-
-
-@tree.command(name="warnreset", description="Reset a user's warning count", guild=GUILD_OBJ)
-@discord.app_commands.describe(member="Member whose warnings will be reset")
-@discord.app_commands.default_permissions(moderate_members=True)
-async def warnreset_cmd(interaction: discord.Interaction, member: discord.Member):
-    if not await slash_perm(interaction, "moderate_members"):
-        return
-    await slash_send(interaction, await act_warnreset(interaction.guild, interaction.user, member))
-
-
-case_group = discord.app_commands.Group(
-    name="case",
-    description="Moderation cases",
-    guild_ids=[GUILD_ID],
-    default_permissions=discord.Permissions(moderate_members=True),
-)
-
-
-@case_group.command(name="view", description="View a case")
-@discord.app_commands.describe(case_id="Case number")
-async def case_view_cmd(interaction: discord.Interaction, case_id: int):
-    if not await slash_perm(interaction, "moderate_members"):
-        return
-    await slash_send(interaction, case_view_one(case_id))
-
-
-@case_group.command(name="list", description="List cases for a user")
-@discord.app_commands.describe(user="User to look up")
-async def case_list_cmd(interaction: discord.Interaction, user: discord.User):
-    if not await slash_perm(interaction, "moderate_members"):
-        return
-    await slash_send(interaction, case_list_view(user.id))
-
-
-@case_group.command(name="recent", description="Show the most recent cases")
-@discord.app_commands.describe(amount="How many cases to show (1-25)")
-async def case_recent_cmd(interaction: discord.Interaction, amount: int = 10):
-    if not await slash_perm(interaction, "moderate_members"):
-        return
-    await slash_send(interaction, case_recent_view(amount))
-
-
-@case_group.command(name="reason", description="Change the reason of a case")
-@discord.app_commands.describe(case_id="Case number", reason="New reason")
-async def case_reason_cmd(interaction: discord.Interaction, case_id: int, reason: str):
-    if not await slash_perm(interaction, "moderate_members"):
-        return
-    await slash_send(interaction, await case_set_reason(interaction.guild, interaction.user, case_id, reason))
-
-
-@case_group.command(name="remove", description="Remove a case")
-@discord.app_commands.describe(case_id="Case number")
-async def case_remove_cmd(interaction: discord.Interaction, case_id: int):
-    if not await slash_perm(interaction, "administrator"):
-        return
-    await slash_send(interaction, case_remove_one(case_id))
-
-
-@case_group.command(name="removeall", description="Remove every case for a user")
-@discord.app_commands.describe(user="User whose cases will be removed")
-async def case_removeall_cmd(interaction: discord.Interaction, user: discord.User):
-    if not await slash_perm(interaction, "administrator"):
-        return
-    await slash_send(interaction, case_remove_user(user.id))
-
-
-tree.add_command(case_group)
-
-appeals_group = discord.app_commands.Group(
-    name="appeals",
-    description="Ban appeal system",
-    guild_ids=[GUILD_ID],
-    default_permissions=discord.Permissions(manage_guild=True),
-)
-
-
-@appeals_group.command(name="status", description="Show the appeal system settings")
-async def appeals_status_cmd(interaction: discord.Interaction):
-    if not await slash_perm(interaction, "manage_guild"):
-        return
-    await slash_send(interaction, ap_status_view())
-
-
-@appeals_group.command(name="channel", description="Set the channel that receives appeals")
-@discord.app_commands.describe(channel="Channel for appeals")
-async def appeals_channel_cmd(interaction: discord.Interaction, channel: discord.TextChannel):
-    if not await slash_perm(interaction, "manage_guild"):
-        return
-    await slash_send(interaction, ap_set_channel(channel))
-
-
-@appeals_group.command(name="window", description="Set how many days after a ban users can appeal")
-@discord.app_commands.describe(days="Number of days (1-365)")
-async def appeals_window_cmd(interaction: discord.Interaction, days: int):
-    if not await slash_perm(interaction, "manage_guild"):
-        return
-    await slash_send(interaction, ap_set_window(days))
-
-
-@appeals_group.command(name="questions", description="Set the appeal questions")
-@discord.app_commands.describe(questions="Up to 5 questions separated by |, 45 characters each")
-async def appeals_questions_cmd(interaction: discord.Interaction, questions: str):
-    if not await slash_perm(interaction, "manage_guild"):
-        return
-    await slash_send(interaction, ap_set_questions(questions))
-
-
-tree.add_command(appeals_group)
-
-
-class SlashChannel:
-    def __init__(self, interaction: discord.Interaction):
-        self._interaction = interaction
-        self._channel = interaction.channel
-        self.sent = False
-
-    def __getattr__(self, name):
-        return getattr(self._channel, name)
-
-    async def send(self, content=None, **kwargs):
-        kwargs.pop("reference", None)
-        kwargs.pop("mention_author", None)
-        self.sent = True
-        if content is not None:
-            return await self._interaction.followup.send(content, **kwargs)
-        return await self._interaction.followup.send(**kwargs)
-
-
-class SlashMessage:
-    def __init__(self, interaction: discord.Interaction, content: str, mentions=None, channel_mentions=None, role_mentions=None, reference=None):
-        self.interaction = interaction
-        self.author = interaction.user
-        self.guild = interaction.guild
-        self.channel = SlashChannel(interaction)
-        self.content = content
-        self.mentions = mentions or []
-        self.channel_mentions = channel_mentions or []
-        self.role_mentions = role_mentions or []
-        self.attachments = []
-        self.stickers = []
-        self.reference = reference
-        self.id = interaction.id
-        self.created_at = interaction.created_at
-        self.mention_everyone = False
-
-    async def delete(self, *args, **kwargs):
-        return None
-
-    async def add_reaction(self, *args, **kwargs):
-        return None
-
-    async def reply(self, content=None, **kwargs):
-        return await self.channel.send(content, **kwargs)
-
-
-async def run_util_slash(interaction: discord.Interaction, cmd: str, rest: str, mentions=None, channel_mentions=None, role_mentions=None, reference=None, ephemeral=False):
-    now = time.time()
-    if now - ut_last.get(interaction.user.id, 0) < 2:
-        await interaction.response.send_message(view=tk_err("Slow down a little before using another command."), ephemeral=True)
-        return
-    ut_last[interaction.user.id] = now
-    await interaction.response.defer(ephemeral=ephemeral)
-    msg = SlashMessage(interaction, f"{PREFIX}{cmd} {rest}".strip(), mentions, channel_mentions, role_mentions, reference)
-    try:
-        await UTIL_CMDS[cmd](msg, rest)
-    except Exception as e:
-        print(f"Utility command {cmd} failed: {e}")
+async def mx_on_join(member):
+    cfg = mx_cfg()
+    guild = member.guild
+    forced = cfg["forcenick"].get(str(member.id))
+    if forced:
         try:
-            await interaction.followup.send(view=tk_err(f"Something went wrong running `{cmd}`."), ephemeral=True)
-            msg.channel.sent = True
+            await member.edit(nick=forced, reason="Forced nickname")
         except Exception:
             pass
-    if not msg.channel.sent:
+    if str(member.id) in cfg["jail"]:
+        role = guild.get_role(cfg["jail_cfg"].get("role", 0))
+        if role is not None:
+            try:
+                await member.add_roles(role, reason="Jail persists after rejoin")
+            except Exception:
+                pass
+        return
+    saved = cfg["sticky"].pop(str(member.id), None) if cfg["sticky_on"] else None
+    if saved:
+        roles = [guild.get_role(i) for i in saved]
+        roles = [r for r in roles if r is not None and not r.managed and not r.is_default() and r < guild.me.top_role]
+        if roles:
+            try:
+                await member.add_roles(*roles, reason="Sticky roles")
+            except Exception:
+                pass
+        mx_save()
+
+
+def mx_on_leave(member):
+    cfg = mx_cfg()
+    if not cfg["sticky_on"] or member.bot:
+        return
+    roles = [r.id for r in member.roles if not r.is_default() and not r.managed]
+    if roles:
+        cfg["sticky"][str(member.id)] = roles
+        mx_save()
+
+
+async def mx_on_member_update(before, after):
+    forced = mx_cfg()["forcenick"].get(str(after.id))
+    if forced and after.nick != forced:
         try:
-            await interaction.followup.send(view=ok("Done", f"`/{cmd}` finished."), ephemeral=True)
+            await after.edit(nick=forced, reason="Forced nickname")
         except Exception:
             pass
 
 
-UT_INFO = discord.app_commands.Group(name="info", description="Information commands", guild_ids=[GUILD_ID])
-UT_TOOLS = discord.app_commands.Group(name="tools", description="Utility tools", guild_ids=[GUILD_ID])
-UT_TEXT = discord.app_commands.Group(name="text", description="Text, encoding and developer tools", guild_ids=[GUILD_ID])
-
-MODE_CHOICES = [
-    discord.app_commands.Choice(name="Encode", value="encode"),
-    discord.app_commands.Choice(name="Decode", value="decode"),
-]
-
-
-def sl_plain(group, name, desc, ephemeral=False):
-    async def cb(interaction: discord.Interaction):
-        await run_util_slash(interaction, name, "", ephemeral=ephemeral)
-    group.command(name=name, description=desc)(cb)
-
-
-def sl_text(group, name, desc, label, required=True, ephemeral=False):
-    if required:
-        async def cb(interaction: discord.Interaction, text: str):
-            await run_util_slash(interaction, name, text, ephemeral=ephemeral)
-    else:
-        async def cb(interaction: discord.Interaction, text: str = ""):
-            await run_util_slash(interaction, name, text, ephemeral=ephemeral)
-    discord.app_commands.describe(text=label)(cb)
-    group.command(name=name, description=desc)(cb)
-
-
-def sl_codec(group, name, desc):
-    async def cb(interaction: discord.Interaction, mode: discord.app_commands.Choice[str], text: str):
-        await run_util_slash(interaction, name, f"{mode.value} {text}")
-    discord.app_commands.describe(mode="Encode or decode", text="Text to convert")(cb)
-    discord.app_commands.choices(mode=MODE_CHOICES)(cb)
-    group.command(name=name, description=desc)(cb)
-
-
-for _n, _d in (
-    ("serverinfo", "View info about this server"),
-    ("botinfo", "View bot information"),
-    ("stats", "View server and bot stats"),
-    ("emojis", "List all server emojis"),
-):
-    sl_plain(UT_INFO, _n, _d)
-
-for _n, _d, _l in (
-    ("inviteinfo", "Inspect a Discord invite", "Invite link or code"),
-    ("whois", "Domain registration info", "Domain name"),
-    ("dns", "DNS records for a domain", "Domain, optionally followed by a record type"),
-    ("ip", "IP geolocation", "IP address or domain"),
-    ("sslcheck", "TLS certificate and expiry", "Domain name"),
-    ("httpstatus", "What an HTTP status code means", "Status code, e.g. 404"),
-    ("expand", "Unshorten a URL", "Shortened link"),
-):
-    sl_text(UT_INFO, _n, _d, _l)
-
-for _n, _d, _l, _r in (
-    ("qr", "Generate a QR code", "Text or link to encode", True),
-    ("color", "Info about a color", "Hex, RGB or color name", True),
-    ("math", "Evaluate a math expression", "Expression to evaluate", True),
-    ("timestamp", "Discord timestamp formats", "Time such as 'in 2 hours' (optional)", False),
-    ("urban", "Urban Dictionary lookup", "Word or phrase", True),
-    ("todo", "Your personal todo list", "Subcommand and text, e.g. add buy milk (optional)", False),
-    ("useragent", "Parse a user agent", "User agent string", True),
-    ("iban", "Validate an IBAN", "IBAN to validate", True),
-    ("cidr", "Subnet calculator", "IP with prefix, e.g. 192.168.1.0/24", True),
-    ("wordcount", "Count words and characters", "Text to analyze", True),
-):
-    sl_text(UT_TOOLS, _n, _d, _l, _r)
-
-for _n, _d, _l, _e in (
-    ("ascii", "Fancy Unicode fonts", "Text to convert", False),
-    ("char", "Unicode character info", "Characters to inspect", False),
-    ("entropy", "Password strength estimate", "Password or text to check", True),
-    ("hash", "Hash text with common algorithms", "Text to hash", False),
-    ("json", "Validate and pretty-print JSON", "JSON to format", False),
-    ("jwt", "Decode a JWT", "Token to decode", True),
-    ("rot13", "Apply ROT13 to text", "Text to convert", False),
-    ("slugify", "Make a URL-friendly slug", "Text to slugify", False),
-):
-    sl_text(UT_TEXT, _n, _d, _l, True, _e)
-
-for _n, _d in (
-    ("base32", "Encode or decode Base32"),
-    ("base64", "Encode or decode Base64"),
-    ("binary", "Encode or decode binary"),
-    ("morse", "Encode or decode Morse code"),
-    ("urlencode", "Percent-encode or decode text"),
-):
-    sl_codec(UT_TEXT, _n, _d)
-
-
-@UT_INFO.command(name="userinfo", description="View info about a user")
-@discord.app_commands.describe(user="User to look up (defaults to you)")
-async def sl_userinfo(interaction: discord.Interaction, user: discord.User = None):
-    await run_util_slash(interaction, "userinfo", "", mentions=[user] if user else [])
-
-
-@UT_INFO.command(name="banner", description="Get a user's banner")
-@discord.app_commands.describe(user="User to look up (defaults to you)")
-async def sl_banner(interaction: discord.Interaction, user: discord.User = None):
-    await run_util_slash(interaction, "banner", "", mentions=[user] if user else [])
-
-
-@UT_INFO.command(name="roleinfo", description="View info about a role")
-@discord.app_commands.describe(role="Role to look up")
-async def sl_roleinfo(interaction: discord.Interaction, role: discord.Role):
-    await run_util_slash(interaction, "roleinfo", role.mention, role_mentions=[role])
-
-
-@UT_INFO.command(name="channelinfo", description="View info about a channel")
-@discord.app_commands.describe(channel="Channel to look up (defaults to this channel)")
-async def sl_channelinfo(interaction: discord.Interaction, channel: discord.abc.GuildChannel = None):
-    await run_util_slash(interaction, "channelinfo", channel.mention if channel else "", channel_mentions=[channel] if channel else [])
-
-
-@UT_INFO.command(name="activity", description="Start a voice channel activity")
-@discord.app_commands.describe(name="Activity to start (join a voice channel first)")
-@discord.app_commands.choices(name=[discord.app_commands.Choice(name=v[0], value=k) for k, v in list(UT_ACTIVITIES.items())[:25]])
-async def sl_activity(interaction: discord.Interaction, name: discord.app_commands.Choice[str]):
-    await run_util_slash(interaction, "activity", name.value)
-
-
-@UT_INFO.command(name="counting", description="Set up or manage the counting game")
-@discord.app_commands.describe(action="What to do", channel="Channel for the counting game (setup only)")
-@discord.app_commands.choices(action=[
-    discord.app_commands.Choice(name="Setup", value="setup"),
-    discord.app_commands.Choice(name="Off", value="off"),
-    discord.app_commands.Choice(name="Reset", value="reset"),
-    discord.app_commands.Choice(name="Status", value="status"),
-])
-async def sl_counting(interaction: discord.Interaction, action: discord.app_commands.Choice[str], channel: discord.TextChannel = None):
-    await run_util_slash(
-        interaction, "counting", f"{action.value} {channel.mention if channel else ''}".strip(),
-        channel_mentions=[channel] if channel else [],
-    )
-
-
-@UT_INFO.command(name="stealsticker", description="Copy a sticker from a message into this server")
-@discord.app_commands.describe(message_id="ID of a message in this channel that has the sticker")
-async def sl_stealsticker(interaction: discord.Interaction, message_id: str):
+@bot.event
+async def on_raw_reaction_add(payload):
+    if payload.guild_id != GUILD_ID or bot.user is None or payload.user_id == bot.user.id:
+        return
+    guild = bot.get_guild(GUILD_ID)
+    if guild is None:
+        return
+    cfg = mx_cfg()
+    if payload.user_id in cfg["restricted"]:
+        channel = guild.get_channel_or_thread(payload.channel_id)
+        if channel is not None:
+            try:
+                await channel.get_partial_message(payload.message_id).remove_reaction(payload.emoji, discord.Object(id=payload.user_id))
+            except Exception:
+                pass
+        return
+    entry = cfg["reactionroles"].get(str(payload.message_id))
+    if entry is None:
+        return
+    role = guild.get_role(mx_rr_role(entry, payload.emoji))
+    member = payload.member or guild.get_member(payload.user_id)
+    if role is None or member is None or member.bot:
+        return
     try:
-        target = await interaction.channel.fetch_message(int(message_id))
+        await member.add_roles(role, reason="Reaction role")
     except Exception:
-        await interaction.response.send_message(view=tk_err("Message not found in this channel."), ephemeral=True)
+        pass
+
+
+@bot.event
+async def on_raw_reaction_remove(payload):
+    if payload.guild_id != GUILD_ID or bot.user is None or payload.user_id == bot.user.id:
         return
-    await run_util_slash(interaction, "stealsticker", "", reference=SimpleNamespace(resolved=target))
+    guild = bot.get_guild(GUILD_ID)
+    if guild is None:
+        return
+    entry = mx_cfg()["reactionroles"].get(str(payload.message_id))
+    if entry is None:
+        return
+    role = guild.get_role(mx_rr_role(entry, payload.emoji))
+    member = guild.get_member(payload.user_id)
+    if role is None or member is None:
+        return
+    try:
+        await member.remove_roles(role, reason="Reaction role")
+    except Exception:
+        pass
 
 
-@UT_TOOLS.command(name="translate", description="Translate text")
-@discord.app_commands.describe(language="Target language code, e.g. en, tl, ja", text="Text to translate")
-async def sl_translate(interaction: discord.Interaction, language: str, text: str):
-    await run_util_slash(interaction, "translate", f"{language} {text}")
+async def mx_interaction_check(interaction: discord.Interaction) -> bool:
+    if (
+        interaction.guild_id == GUILD_ID
+        and interaction.type == discord.InteractionType.application_command
+        and interaction.channel_id in mx_cfg()["ignored"]
+        and isinstance(interaction.user, discord.Member)
+        and not mx_super(interaction.user)
+    ):
+        await interaction.response.send_message(view=err("Commands are ignored in this channel."), ephemeral=True)
+        return False
+    return True
 
 
-@UT_TOOLS.command(name="lorem", description="Generate placeholder text")
-@discord.app_commands.describe(amount="How many to generate", kind="Words, sentences or paragraphs")
-@discord.app_commands.choices(kind=[
-    discord.app_commands.Choice(name="Words", value="words"),
-    discord.app_commands.Choice(name="Sentences", value="sentences"),
-    discord.app_commands.Choice(name="Paragraphs", value="paragraphs"),
-])
-async def sl_lorem(interaction: discord.Interaction, amount: int = 3, kind: discord.app_commands.Choice[str] = None):
-    await run_util_slash(interaction, "lorem", f"{amount} {kind.value if kind else 'sentences'}")
+tree.interaction_check = mx_interaction_check
 
 
-@UT_TOOLS.command(name="password", description="Generate a secure password and send it by DM")
-@discord.app_commands.describe(length="Password length")
-async def sl_password(interaction: discord.Interaction, length: int = 16):
-    await run_util_slash(interaction, "password", str(length), ephemeral=True)
+def mx_first(items):
+    return items[0] if items else None
 
 
-@UT_TOOLS.command(name="uuid", description="Generate random UUIDs")
-@discord.app_commands.describe(count="How many UUIDs")
-async def sl_uuid(interaction: discord.Interaction, count: int = 1):
-    await run_util_slash(interaction, "uuid", str(count))
+async def mxp_dm(ctx, message, args):
+    member = mx_first(mx_members(message, args[1:2]))
+    text = mx_tail(message, 2)
+    if member is None or not text:
+        return await ctx.send(err(f"Usage: `{PREFIX}dm @user <message>`"))
+    await mx_dm(ctx, member, text)
 
 
-@UT_TOOLS.command(name="diff", description="Show the difference between two texts")
-@discord.app_commands.describe(first="First text", second="Second text")
-async def sl_diff(interaction: discord.Interaction, first: str, second: str):
-    await run_util_slash(interaction, "diff", f"{first} | {second}")
+async def mxp_roleall(ctx, message, args):
+    action = "remove" if len(args) > 1 and args[1].lower() == "remove" else "add"
+    role = mx_first(mx_roles(message, args[1:]))
+    target = args[-1].lower() if args[-1].lower() in ("everyone", "humans", "bots") else "humans"
+    if role is None:
+        return await ctx.send(err(f"Usage: `{PREFIX}roleall <add|remove> @role [everyone|humans|bots]`"))
+    await mx_roleall(ctx, action, role, target)
 
 
-@UT_TOOLS.command(name="regex", description="Test a regex against some text")
-@discord.app_commands.describe(pattern="Regex pattern", text="Text to test against")
-async def sl_regex(interaction: discord.Interaction, pattern: str, text: str):
-    await run_util_slash(interaction, "regex", f"{pattern} | {text}")
+async def mxp_massrole(ctx, message, args):
+    if len(args) < 3 or args[1].lower() not in ("add", "remove"):
+        return await ctx.send(err(f"Usage: `{PREFIX}massrole <add|remove> @role @user @user ...`"))
+    role = mx_first(mx_roles(message, args[2:]))
+    members = mx_members(message, args[2:])
+    if role is None:
+        return await ctx.send(err("Provide a valid role."))
+    await mx_massrole(ctx, args[1].lower(), role, members)
 
 
-@UT_TEXT.command(name="base", description="Convert a number between bases")
-@discord.app_commands.describe(number="Number to convert", from_base="Base it is in (2-36), e.g. 10", to_base="Base to convert to (2-36, optional)")
-async def sl_base(interaction: discord.Interaction, number: str, from_base: str, to_base: str = ""):
-    await run_util_slash(interaction, "base", f"{number} {from_base} {to_base}".strip())
+async def mxp_giverole(ctx, message, args):
+    member = mx_first(mx_members(message, args[1:]))
+    role = mx_first(mx_roles(message, args[1:]))
+    if member is None or role is None:
+        return await ctx.send(err(f"Usage: `{PREFIX}giverole @user @role`"))
+    await mx_giverole(ctx, member, role)
 
 
-tree.add_command(UT_INFO)
-tree.add_command(UT_TOOLS)
-tree.add_command(UT_TEXT)
+async def mxp_role(ctx, message, args):
+    usage = (
+        f"Usage:\n`{PREFIX}role create <name> [#hex]`\n`{PREFIX}role delete @role`\n`{PREFIX}role rename @role <name>`\n"
+        f"`{PREFIX}role color @role <#hex>`\n`{PREFIX}role hoist @role`\n`{PREFIX}role mentionable @role`\n"
+        f"`{PREFIX}role add @user @role`\n`{PREFIX}role remove @user @role`"
+    )
+    if len(args) < 2:
+        return await ctx.send(err(usage))
+    action = args[1].lower()
+    if action == "create":
+        parts = args[2:]
+        color = None
+        if parts and parts[-1].startswith("#") and mx_color(parts[-1]) is not None:
+            color = parts[-1]
+            parts = parts[:-1]
+        name = " ".join(parts)
+        return await mx_role(ctx, "create", name=name, color=color)
+    if action in ("delete", "hoist", "mentionable"):
+        role = mx_first(mx_roles(message, args[2:]))
+        return await mx_role(ctx, action, role=role)
+    if action == "rename":
+        role = mx_first(mx_roles(message, args[2:3]))
+        return await mx_role(ctx, "rename", role=role, name=mx_tail(message, 3))
+    if action == "color":
+        role = mx_first(mx_roles(message, args[2:3]))
+        return await mx_role(ctx, "color", role=role, color=args[3] if len(args) > 3 else None)
+    if action in ("add", "remove"):
+        member = mx_first(mx_members(message, args[2:]))
+        role = mx_first(mx_roles(message, args[2:]))
+        return await mx_role(ctx, action, role=role, member=member)
+    await ctx.send(err(usage))
+
+
+async def mxp_forcenick(ctx, message, args):
+    member = mx_first(mx_members(message, args[1:2]))
+    if member is None:
+        return await ctx.send(err(f"Usage: `{PREFIX}forcenick @user <nickname|off>`"))
+    await mx_forcenick(ctx, member, mx_tail(message, 2))
+
+
+async def mxp_honeypot(ctx, message, args):
+    sub = args[1].lower() if len(args) > 1 else "status"
+    if sub in ("off", "status"):
+        return await mx_honeypot(ctx, sub)
+    channel = mx_first(mx_channels(message, args[1:]))
+    punishment = next((a.lower() for a in args if a.lower() in MX_PUNISHMENTS), "ban")
+    if channel is None:
+        return await ctx.send(err(f"Usage: `{PREFIX}honeypot set #channel [ban|softban|kick|timeout|jail]` | `{PREFIX}honeypot off` | `{PREFIX}honeypot status`"))
+    await mx_honeypot(ctx, "set", channel, punishment)
+
+
+async def mxp_ignoredchannels(ctx, message, args):
+    sub = args[1].lower() if len(args) > 1 else "list"
+    if sub not in ("add", "remove", "list"):
+        return await ctx.send(err(f"Usage: `{PREFIX}ignoredchannels <add|remove|list> [#channel]`"))
+    await mx_ignored(ctx, sub, mx_first(mx_channels(message, args[2:])))
+
+
+async def mxp_jail(ctx, message, args):
+    if len(args) > 1 and args[1].lower() == "setup":
+        return await mx_jail_setup(ctx)
+    member = mx_first(mx_members(message, args[1:2]))
+    if member is None:
+        return await ctx.send(err(f"Usage: `{PREFIX}jail @user [reason]` | `{PREFIX}jail setup`"))
+    await mx_jail(ctx, member, mx_tail(message, 2) or "No reason provided")
+
+
+async def mxp_unjail(ctx, message, args):
+    member = mx_first(mx_members(message, args[1:2]))
+    if member is None:
+        return await ctx.send(err(f"Usage: `{PREFIX}unjail @user`"))
+    await mx_unjail(ctx, member)
+
+
+async def mxp_masspurge(ctx, message, args):
+    user = await mx_user_from(message, args[1:2])
+    if user is None:
+        return await ctx.send(err(f"Usage: `{PREFIX}masspurge @user|id [messages per channel]`"))
+    limit = 100
+    if len(args) > 2 and args[-1].isdigit() and len(args[-1]) < 6:
+        limit = int(args[-1])
+    await mx_masspurge(ctx, user, limit)
+
+
+async def mxp_modmail(ctx, message, args):
+    sub = args[1].lower() if len(args) > 1 else "status"
+    if sub == "setup":
+        category = None
+        if len(args) > 2:
+            token = " ".join(args[2:])
+            if token.isdigit():
+                category = ctx.guild.get_channel(int(token))
+            else:
+                category = discord.utils.find(lambda c: c.name.lower() == token.lower(), ctx.guild.categories)
+        if not isinstance(category, discord.CategoryChannel):
+            return await ctx.send(err(f"Usage: `{PREFIX}modmail setup <category id or name>`"))
+        return await mx_modmail(ctx, "setup", category=category)
+    if sub in ("reply", "close"):
+        return await mx_modmail(ctx, sub, text=mx_tail(message, 2))
+    if sub in ("block", "unblock"):
+        member = mx_first(mx_members(message, args[2:]))
+        return await mx_modmail(ctx, sub, member=member)
+    if sub in ("off", "status"):
+        return await mx_modmail(ctx, sub)
+    await ctx.send(err(f"Usage: `{PREFIX}modmail <setup|off|status|reply|close|block|unblock>`"))
+
+
+async def mxp_modnote(ctx, message, args):
+    sub = args[1].lower() if len(args) > 1 else ""
+    if sub in ("add", "view", "remove"):
+        user = await mx_user_from(message, args[2:3])
+        if user is None:
+            return await ctx.send(err(f"Usage: `{PREFIX}modnote <add|view|remove> @user [note|number]`"))
+        if sub == "add":
+            return await mx_modnote(ctx, "add", user, text=mx_tail(message, 3))
+        if sub == "remove":
+            number = int(args[3]) if len(args) > 3 and args[3].isdigit() else None
+            return await mx_modnote(ctx, "remove", user, number=number)
+        return await mx_modnote(ctx, "view", user)
+    user = await mx_user_from(message, args[1:2])
+    if user is None:
+        return await ctx.send(err(f"Usage: `{PREFIX}modnote <add|view|remove> @user [note|number]`"))
+    await mx_modnote(ctx, "view", user)
+
+
+async def mxp_modstats(ctx, message, args):
+    days = int(args[1]) if len(args) > 1 and args[1].isdigit() else 7
+    await mx_modstats(ctx, days)
+
+
+async def mxp_moveall(ctx, message, args):
+    channel = next((c for c in mx_channels(message, args[1:]) if isinstance(c, (discord.VoiceChannel, discord.StageChannel))), None)
+    if channel is None:
+        return await ctx.send(err(f"Usage: `{PREFIX}moveall #voice-channel`"))
+    await mx_moveall(ctx, channel)
+
+
+async def mxp_picperms(ctx, message, args):
+    member = mx_first(mx_members(message, args[1:]))
+    if member is None:
+        return await ctx.send(err(f"Usage: `{PREFIX}picperms @user [#channel]`"))
+    channel = next((c for c in mx_channels(message, args[1:]) if isinstance(c, discord.TextChannel)), None)
+    await mx_picperms(ctx, member, channel)
+
+
+async def mxp_reactionrole(ctx, message, args):
+    sub = args[1].lower() if len(args) > 1 else ""
+    usage = f"Usage: `{PREFIX}reactionrole add <message id|link> <emoji> @role` | `{PREFIX}reactionrole remove <message id|link> <emoji>` | `{PREFIX}reactionrole list`"
+    if sub == "list":
+        return await mx_reactionrole(ctx, "list")
+    if sub not in ("add", "remove") or len(args) < 4:
+        return await ctx.send(err(usage))
+    role = mx_first(mx_roles(message, args[4:])) if sub == "add" else None
+    channel = next((c for c in mx_channels(message, args[4:]) if isinstance(c, discord.TextChannel)), None)
+    await mx_reactionrole(ctx, sub, args[2], args[3], role, channel)
+
+
+async def mxp_restrict(ctx, message, args):
+    member = mx_first(mx_members(message, args[1:2]))
+    if member is None:
+        return await ctx.send(err(f"Usage: `{PREFIX}restrict @user`"))
+    await mx_restrict(ctx, member)
+
+
+async def mxp_softban(ctx, message, args):
+    user = await mx_user_from(message, args[1:2])
+    if user is None:
+        return await ctx.send(err(f"Usage: `{PREFIX}softban @user [reason]`"))
+    await mx_softban(ctx, user, mx_tail(message, 2) or "No reason provided")
+
+
+async def mxp_staffroles(ctx, message, args):
+    sub = args[1].lower() if len(args) > 1 else "list"
+    if sub not in ("add", "remove", "list"):
+        return await ctx.send(err(f"Usage: `{PREFIX}staffroles <add|remove|list> [@role]`"))
+    await mx_staffroles(ctx, sub, mx_first(mx_roles(message, args[2:])))
+
+
+async def mxp_stickyroles(ctx, message, args):
+    sub = args[1].lower() if len(args) > 1 else "status"
+    if sub not in ("on", "off", "status"):
+        return await ctx.send(err(f"Usage: `{PREFIX}stickyroles <on|off|status>`"))
+    await mx_stickyroles(ctx, sub)
+
+
+async def mxp_suggest(ctx, message, args):
+    text = mx_tail(message, 1)
+    if not text:
+        return await ctx.send(err(f"Usage: `{PREFIX}suggest <your suggestion>`"))
+    await mx_suggest(ctx, text)
+
+
+async def mxp_suggestions(ctx, message, args):
+    sub = args[1].lower() if len(args) > 1 else "status"
+    if sub == "setup":
+        channel = mx_first(mx_channels(message, args[2:]))
+        if channel is None:
+            return await ctx.send(err(f"Usage: `{PREFIX}suggestions setup #channel`"))
+        return await mx_suggestions(ctx, "setup", channel)
+    if sub in ("off", "status"):
+        return await mx_suggestions(ctx, sub)
+    if sub in ("approve", "deny"):
+        number = int(args[2]) if len(args) > 2 and args[2].isdigit() else None
+        return await mx_suggestions(ctx, sub, number=number, reason=mx_tail(message, 3) or None)
+    await ctx.send(err(f"Usage: `{PREFIX}suggestions <setup|off|status|approve|deny>`"))
+
+
+async def mxp_extraowner(ctx, message, args):
+    sub = args[1].lower() if len(args) > 1 else "list"
+    if sub not in ("add", "remove", "list"):
+        return await ctx.send(err(f"Usage: `{PREFIX}extraowner <add|remove|list> [@user]`"))
+    await mx_extraowner(ctx, sub, mx_first(mx_members(message, args[2:])))
+
+
+MX_PREFIX = {
+    "dm": mxp_dm,
+    "roleall": mxp_roleall,
+    "massrole": mxp_massrole,
+    "giverole": mxp_giverole,
+    "role": mxp_role,
+    "forcenick": mxp_forcenick,
+    "honeypot": mxp_honeypot,
+    "ignoredchannels": mxp_ignoredchannels,
+    "jail": mxp_jail,
+    "unjail": mxp_unjail,
+    "masspurge": mxp_masspurge,
+    "modmail": mxp_modmail,
+    "modnote": mxp_modnote,
+    "modstats": mxp_modstats,
+    "moveall": mxp_moveall,
+    "picperms": mxp_picperms,
+    "reactionrole": mxp_reactionrole,
+    "restrict": mxp_restrict,
+    "softban": mxp_softban,
+    "staffroles": mxp_staffroles,
+    "stickyroles": mxp_stickyroles,
+    "suggest": mxp_suggest,
+    "suggestions": mxp_suggestions,
+    "extraowner": mxp_extraowner,
+}
+
+
+async def mx_prefix(message: discord.Message, cmd: str, args: list) -> bool:
+    fn = MX_PREFIX.get(cmd)
+    if fn is None:
+        return False
+    ctx = MxCtx(message)
+    await mx_guard(ctx, fn(ctx, message, args))
+    return True
+
+
+@tree.command(name="dm", description="Send a direct message to a member as staff", guild=GUILD_OBJ)
+@discord.app_commands.describe(member="Member to message", message="Message to send")
+@discord.app_commands.default_permissions(manage_messages=True)
+async def dm_slash(interaction: discord.Interaction, member: discord.Member, message: str):
+    ctx = MxCtx(interaction)
+    await mx_guard(ctx, mx_dm(ctx, member, message))
+
+
+@tree.command(name="roleall", description="Add or remove a role from every member", guild=GUILD_OBJ)
+@discord.app_commands.describe(action="Add or remove", role="Role to apply", target="Who to apply it to")
+@discord.app_commands.choices(
+    action=mx_choices("add", "remove"),
+    target=mx_choices("humans", "bots", "everyone")
+)
+@discord.app_commands.default_permissions(manage_roles=True)
+async def roleall_slash(interaction: discord.Interaction, action: discord.app_commands.Choice[str], role: discord.Role, target: discord.app_commands.Choice[str] = None):
+    ctx = MxCtx(interaction)
+    await mx_guard(ctx, mx_roleall(ctx, action.value, role, target.value if target else "humans"))
+
+
+@tree.command(name="massrole", description="Add or remove a role from many members at once", guild=GUILD_OBJ)
+@discord.app_commands.describe(action="Add or remove", role="Role to apply", members="Mention or paste IDs of the members")
+@discord.app_commands.choices(action=mx_choices("add", "remove"))
+@discord.app_commands.default_permissions(manage_roles=True)
+async def massrole_slash(interaction: discord.Interaction, action: discord.app_commands.Choice[str], role: discord.Role, members: str):
+    ctx = MxCtx(interaction)
+    found = [interaction.guild.get_member(i) for i in mx_ids_in(members)]
+    await mx_guard(ctx, mx_massrole(ctx, action.value, role, [m for m in found if m is not None]))
+
+
+@tree.command(name="giverole", description="Give a role to a member", guild=GUILD_OBJ)
+@discord.app_commands.describe(member="Member to give the role to", role="Role to give")
+@discord.app_commands.default_permissions(manage_roles=True)
+async def giverole_slash(interaction: discord.Interaction, member: discord.Member, role: discord.Role):
+    ctx = MxCtx(interaction)
+    await mx_guard(ctx, mx_giverole(ctx, member, role))
+
+
+@tree.command(name="role", description="Create, edit and manage roles", guild=GUILD_OBJ)
+@discord.app_commands.describe(action="What to do", role="Target role", name="Name for create or rename", color="Hex color like #ff0000", member="Member for add or remove")
+@discord.app_commands.choices(action=mx_choices("create", "delete", "rename", "color", "hoist", "mentionable", "add", "remove"))
+@discord.app_commands.default_permissions(manage_roles=True)
+async def role_slash(
+    interaction: discord.Interaction,
+    action: discord.app_commands.Choice[str],
+    role: discord.Role = None,
+    name: str = None,
+    color: str = None,
+    member: discord.Member = None
+):
+    ctx = MxCtx(interaction)
+    await mx_guard(ctx, mx_role(ctx, action.value, role, name, color, member))
+
+
+@tree.command(name="forcenick", description="Lock a member to a nickname", guild=GUILD_OBJ)
+@discord.app_commands.describe(member="Member to lock", nickname="Nickname to force (leave empty to remove the lock)")
+@discord.app_commands.default_permissions(manage_nicknames=True)
+async def forcenick_slash(interaction: discord.Interaction, member: discord.Member, nickname: str = None):
+    ctx = MxCtx(interaction)
+    await mx_guard(ctx, mx_forcenick(ctx, member, nickname))
+
+
+@tree.command(name="honeypot", description="Trap channel that punishes anyone who writes in it", guild=GUILD_OBJ)
+@discord.app_commands.describe(action="Set, remove or view the honeypot", channel="Honeypot channel", punishment="What happens to the offender")
+@discord.app_commands.choices(action=mx_choices("set", "off", "status"), punishment=mx_choices(*MX_PUNISHMENTS))
+@discord.app_commands.default_permissions(manage_guild=True)
+async def honeypot_slash(
+    interaction: discord.Interaction,
+    action: discord.app_commands.Choice[str],
+    channel: discord.TextChannel = None,
+    punishment: discord.app_commands.Choice[str] = None
+):
+    ctx = MxCtx(interaction)
+    await mx_guard(ctx, mx_honeypot(ctx, action.value, channel, punishment.value if punishment else "ban"))
+
+
+@tree.command(name="ignoredchannels", description="Manage channels where bot commands are ignored", guild=GUILD_OBJ)
+@discord.app_commands.describe(action="Add, remove or list", channel="Channel to change")
+@discord.app_commands.choices(action=mx_choices("add", "remove", "list"))
+@discord.app_commands.default_permissions(manage_guild=True)
+async def ignoredchannels_slash(interaction: discord.Interaction, action: discord.app_commands.Choice[str], channel: discord.TextChannel = None):
+    ctx = MxCtx(interaction)
+    await mx_guard(ctx, mx_ignored(ctx, action.value, channel))
+
+
+@tree.command(name="jail", description="Lock a member into the jail channel by stripping their roles", guild=GUILD_OBJ)
+@discord.app_commands.describe(member="Member to jail", reason="Reason for the jail")
+@discord.app_commands.default_permissions(moderate_members=True)
+async def jail_slash(interaction: discord.Interaction, member: discord.Member, reason: str = "No reason provided"):
+    ctx = MxCtx(interaction)
+    await mx_guard(ctx, mx_jail(ctx, member, reason))
+
+
+@tree.command(name="unjail", description="Release a jailed member and restore their roles", guild=GUILD_OBJ)
+@discord.app_commands.describe(member="Member to release")
+@discord.app_commands.default_permissions(moderate_members=True)
+async def unjail_slash(interaction: discord.Interaction, member: discord.Member):
+    ctx = MxCtx(interaction)
+    await mx_guard(ctx, mx_unjail(ctx, member))
+
+
+@tree.command(name="jailsetup", description="Create the jail role and channel", guild=GUILD_OBJ)
+@discord.app_commands.default_permissions(administrator=True)
+async def jailsetup_slash(interaction: discord.Interaction):
+    ctx = MxCtx(interaction)
+    await mx_guard(ctx, mx_jail_setup(ctx))
+
+
+@tree.command(name="masspurge", description="Delete a user's messages across every channel", guild=GUILD_OBJ)
+@discord.app_commands.describe(user="User whose messages to delete", limit="Messages to scan per channel (max 1000)")
+@discord.app_commands.default_permissions(manage_messages=True)
+async def masspurge_slash(interaction: discord.Interaction, user: discord.User, limit: int = 100):
+    ctx = MxCtx(interaction)
+    await mx_guard(ctx, mx_masspurge(ctx, user, limit))
+
+
+@tree.command(name="modmail", description="Configure and use ModMail (DM-to-staff messaging)", guild=GUILD_OBJ)
+@discord.app_commands.describe(action="What to do", category="Category for threads (setup)", text="Reply text or close reason", member="Member to block or unblock")
+@discord.app_commands.choices(action=mx_choices("setup", "off", "status", "reply", "close", "block", "unblock"))
+@discord.app_commands.default_permissions(manage_messages=True)
+async def modmail_slash(
+    interaction: discord.Interaction,
+    action: discord.app_commands.Choice[str],
+    category: discord.CategoryChannel = None,
+    text: str = None,
+    member: discord.Member = None
+):
+    ctx = MxCtx(interaction)
+    await mx_guard(ctx, mx_modmail(ctx, action.value, category, text, member))
+
+
+@tree.command(name="modnote", description="Add or view private staff notes for a user", guild=GUILD_OBJ)
+@discord.app_commands.describe(action="Add, view or remove", user="User the note is about", text="Note text (add)", number="Note number (remove)")
+@discord.app_commands.choices(action=mx_choices("add", "view", "remove"))
+@discord.app_commands.default_permissions(manage_messages=True)
+async def modnote_slash(
+    interaction: discord.Interaction,
+    action: discord.app_commands.Choice[str],
+    user: discord.User,
+    text: str = None,
+    number: int = None
+):
+    ctx = MxCtx(interaction)
+    await mx_guard(ctx, mx_modnote(ctx, action.value, user, text, number))
+
+
+@tree.command(name="modstats", description="Moderation activity over the last days", guild=GUILD_OBJ)
+@discord.app_commands.describe(days="How many days to include")
+@discord.app_commands.default_permissions(manage_messages=True)
+async def modstats_slash(interaction: discord.Interaction, days: int = 7):
+    ctx = MxCtx(interaction)
+    await mx_guard(ctx, mx_modstats(ctx, days))
+
+
+@tree.command(name="moveall", description="Move everyone in your voice channel to another channel", guild=GUILD_OBJ)
+@discord.app_commands.describe(channel="Voice channel to move everyone to")
+@discord.app_commands.default_permissions(move_members=True)
+async def moveall_slash(interaction: discord.Interaction, channel: discord.VoiceChannel):
+    ctx = MxCtx(interaction)
+    await mx_guard(ctx, mx_moveall(ctx, channel))
+
+
+@tree.command(name="picperms", description="Toggle a member's permission to post images/links in a channel", guild=GUILD_OBJ)
+@discord.app_commands.describe(member="Member to toggle", channel="Channel (defaults to this one)")
+@discord.app_commands.default_permissions(manage_roles=True)
+async def picperms_slash(interaction: discord.Interaction, member: discord.Member, channel: discord.TextChannel = None):
+    ctx = MxCtx(interaction)
+    await mx_guard(ctx, mx_picperms(ctx, member, channel))
+
+
+@tree.command(name="reactionrole", description="Give a role when members react to a message with an emoji", guild=GUILD_OBJ)
+@discord.app_commands.describe(action="Add, remove or list", message_id="Message ID or link", emoji="Emoji to react with", role="Role to give", channel="Channel of the message (defaults to this one)")
+@discord.app_commands.choices(action=mx_choices("add", "remove", "list"))
+@discord.app_commands.default_permissions(manage_roles=True)
+async def reactionrole_slash(
+    interaction: discord.Interaction,
+    action: discord.app_commands.Choice[str],
+    message_id: str = None,
+    emoji: str = None,
+    role: discord.Role = None,
+    channel: discord.TextChannel = None
+):
+    ctx = MxCtx(interaction)
+    await mx_guard(ctx, mx_reactionrole(ctx, action.value, message_id, emoji, role, channel))
+
+
+@tree.command(name="restrict", description="Block a member from posting images or adding reactions", guild=GUILD_OBJ)
+@discord.app_commands.describe(member="Member to restrict or unrestrict")
+@discord.app_commands.default_permissions(manage_messages=True)
+async def restrict_slash(interaction: discord.Interaction, member: discord.Member):
+    ctx = MxCtx(interaction)
+    await mx_guard(ctx, mx_restrict(ctx, member))
+
+
+@tree.command(name="softban", description="Ban then immediately unban a user to clear their messages", guild=GUILD_OBJ)
+@discord.app_commands.describe(user="User to softban", reason="Reason for the softban")
+@discord.app_commands.default_permissions(ban_members=True)
+async def softban_slash(interaction: discord.Interaction, user: discord.User, reason: str = "No reason provided"):
+    ctx = MxCtx(interaction)
+    target = interaction.guild.get_member(user.id) or user
+    await mx_guard(ctx, mx_softban(ctx, target, reason))
+
+
+@tree.command(name="staffroles", description="Designate staff roles that are exempt from automod", guild=GUILD_OBJ)
+@discord.app_commands.describe(action="Add, remove or list", role="Role to change")
+@discord.app_commands.choices(action=mx_choices("add", "remove", "list"))
+@discord.app_commands.default_permissions(administrator=True)
+async def staffroles_slash(interaction: discord.Interaction, action: discord.app_commands.Choice[str], role: discord.Role = None):
+    ctx = MxCtx(interaction)
+    await mx_guard(ctx, mx_staffroles(ctx, action.value, role))
+
+
+@tree.command(name="stickyroles", description="Re-apply a member's roles when they rejoin", guild=GUILD_OBJ)
+@discord.app_commands.describe(action="Turn on, off or view status")
+@discord.app_commands.choices(action=mx_choices("on", "off", "status"))
+@discord.app_commands.default_permissions(manage_guild=True)
+async def stickyroles_slash(interaction: discord.Interaction, action: discord.app_commands.Choice[str]):
+    ctx = MxCtx(interaction)
+    await mx_guard(ctx, mx_stickyroles(ctx, action.value))
+
+
+@tree.command(name="suggest", description="Post a suggestion on the suggestions board", guild=GUILD_OBJ)
+@discord.app_commands.describe(text="Your suggestion")
+async def suggest_slash(interaction: discord.Interaction, text: str):
+    ctx = MxCtx(interaction)
+    await mx_guard(ctx, mx_suggest(ctx, text))
+
+
+@tree.command(name="suggestions", description="Configure the suggestions board and review suggestions", guild=GUILD_OBJ)
+@discord.app_commands.describe(action="What to do", channel="Board channel (setup)", number="Suggestion number", reason="Reason for the decision")
+@discord.app_commands.choices(action=mx_choices("setup", "off", "status", "approve", "deny"))
+@discord.app_commands.default_permissions(manage_messages=True)
+async def suggestions_slash(
+    interaction: discord.Interaction,
+    action: discord.app_commands.Choice[str],
+    channel: discord.TextChannel = None,
+    number: int = None,
+    reason: str = None
+):
+    ctx = MxCtx(interaction)
+    await mx_guard(ctx, mx_suggestions(ctx, action.value, channel, number, reason))
+
+
+@tree.command(name="extraowner", description="Grant trusted users owner-level access to Guild Protection", guild=GUILD_OBJ)
+@discord.app_commands.describe(action="Add, remove or list", member="Member to change")
+@discord.app_commands.choices(action=mx_choices("add", "remove", "list"))
+@discord.app_commands.default_permissions(administrator=True)
+async def extraowner_slash(interaction: discord.Interaction, action: discord.app_commands.Choice[str], member: discord.Member = None):
+    ctx = MxCtx(interaction)
+    await mx_guard(ctx, mx_extraowner(ctx, action.value, member))
 
 
 @bot.event
 async def on_ready():
     bot.add_view(VerifyView())
-    bot.add_view(AppealStartView())
-    bot.add_dynamic_items(AppealDecision)
-    asyncio.create_task(tempban_loop())
     bot.add_view(GiveawayPersistentView())
     bot.add_view(TicketPanelPersistentView())
     bot.add_view(TicketControlsPersistentView())
