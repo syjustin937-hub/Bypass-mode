@@ -99,6 +99,7 @@ reference_hashes = load_reference_hashes()
 intents = discord.Intents.default()
 intents.message_content = True
 intents.members = True
+intents.presences = os.getenv("PRESENCE_INTENT", "").lower() in ("1", "true", "yes", "on")
 
 bot = discord.Client(intents=intents)
 tree = discord.app_commands.CommandTree(bot)
@@ -389,6 +390,9 @@ HELP_PAGES = [
         "`.softban @user [reason]` `.restrict @user` `.picperms @user [#channel]`\n"
         "`.forcenick @user <nickname|off>` `.honeypot setup #channel <timeout|quarantine|kick|ban|softban>`\n"
         "`.masspurge @user [limit]` `.moveall #voice`\n\n"
+        "**AutoMod**\n"
+        "`.modules` `.automod` Open the AutoMod panel\n"
+        "`.automod <on|off|action|mute|addword|removeword|words|log|filter|exempt>`\n\n"
         "**Staff Tools**\n"
         "`.modmail <setup|off|status|reply|close|block|unblock>`\n"
         "`.modnote <add|view|remove> @user` `.modstats [days]`\n"
@@ -2281,90 +2285,6 @@ async def antinuke_bot_add(member):
     await nuke_punish(guild, entry.user.id, [], "Added a bot without permission", f"**Bot:** {fmt_ref(member)} ({kicked})")
 
 
-def automod_exempt(member) -> bool:
-    perms = member.guild_permissions
-    if perms.administrator or perms.manage_messages:
-        return True
-    if mx_is_staff_member(member):
-        return True
-    return is_trusted(member.guild, member.id)
-
-
-async def automod_punish(message, rule: str, detail: str, minutes: int, purge_recent: bool = False):
-    guild = message.guild
-    member = message.author
-    try:
-        await message.delete()
-    except Exception:
-        pass
-    if purge_recent:
-        try:
-            mark_action("purge", message.channel.id)
-            await message.channel.purge(
-                limit=25,
-                check=lambda m: m.author.id == member.id,
-                after=discord.utils.utcnow() - timedelta(seconds=60)
-            )
-        except Exception:
-            pass
-    timed = ""
-    if minutes > 0:
-        try:
-            mark_action("timeout", member.id)
-            await member.timeout(discord.utils.utcnow() + timedelta(minutes=minutes), reason=f"AutoMod: {rule}")
-            timed = f"\n**Timeout:** {minutes} minute(s)"
-        except Exception:
-            timed = "\n**Timeout:** failed (check bot permissions)"
-    try:
-        sent = await message.channel.send(view=InfoView(f"🛡️ AutoMod — {rule}", f"{member.mention}, {detail}", discord.Color.orange()))
-        asyncio.create_task(delete_after(sent, 6))
-    except Exception:
-        pass
-    await send_security(
-        guild,
-        f"🛡️ AutoMod — {rule}",
-        f"**User:** {fmt_ref(member)}\n**Channel:** {message.channel.mention}\n**Detail:** {detail}{timed}\n\n**Content**\n{quote(message.content or '(empty)', 600)}",
-        discord.Color.orange(),
-        ping=False
-    )
-
-
-async def automod_check(message) -> bool:
-    if not isinstance(message.author, discord.Member) or message.guild.id != GUILD_ID:
-        return False
-    if automod_exempt(message.author):
-        return False
-    content = message.content or ""
-    link_cfg = sec_cfg("antilink")
-    if link_cfg["enabled"]:
-        if link_cfg["invites"] and INVITE_RE.search(content):
-            await automod_punish(message, "Invite Link", "invite links are not allowed here.", link_cfg["timeout_minutes"])
-            return True
-        if link_cfg["links"] and LINK_RE.search(content):
-            await automod_punish(message, "Link", "links are not allowed here.", link_cfg["timeout_minutes"])
-            return True
-    mention_cfg = sec_cfg("antimention")
-    if mention_cfg["enabled"]:
-        count = len({m.id for m in message.mentions}) + len(message.role_mentions)
-        if message.mention_everyone and not message.author.guild_permissions.mention_everyone:
-            count += mention_cfg["limit"]
-        if count >= mention_cfg["limit"]:
-            await automod_punish(message, "Mass Mention", f"mass mentions are not allowed ({count} mentions).", mention_cfg["timeout_minutes"])
-            return True
-    spam_cfg = sec_cfg("antispam")
-    if spam_cfg["enabled"]:
-        now = time.time()
-        dq = spam_tracker.setdefault(message.author.id, deque())
-        dq.append(now)
-        while dq and now - dq[0] > spam_cfg["window"]:
-            dq.popleft()
-        if len(dq) >= spam_cfg["messages"]:
-            dq.clear()
-            await automod_punish(message, "Spam", f"slow down — {spam_cfg['messages']}+ messages in {spam_cfg['window']}s.", spam_cfg["timeout_minutes"], purge_recent=True)
-            return True
-    return False
-
-
 async def security_prefix(message, cmd, args) -> bool:
     modules = ("antiraid", "antinuke", "antispam", "antilink", "antimention")
     if cmd not in modules + ("security", "panic", "whitelist", "lockdown", "unlockdown"):
@@ -3301,6 +3221,9 @@ async def on_message(message):
     if await mx_prefix(message, cmd, args):
         return
 
+    if await am_prefix(message, cmd, args):
+        return
+
     if cmd == "help":
         await message.channel.send(view=HelpView(message.author.id))
 
@@ -3679,6 +3602,8 @@ async def on_message(message):
 @bot.event
 async def on_message_edit(before, after):
     if after.author.bot or not after.guild or before.content == after.content:
+        return
+    if await automod_check(after, edited=True):
         return
     body = (
         f"**Author:** {fmt_ref(after.author)}\n"
@@ -9030,6 +8955,798 @@ async def suggestions_slash(
 async def extraowner_slash(interaction: discord.Interaction, action: discord.app_commands.Choice[str], member: discord.Member = None):
     ctx = MxCtx(interaction)
     await mx_guard(ctx, mx_extraowner(ctx, action.value, member))
+
+
+AM_FILTERS = [
+    ("badwords", "Bad Words", "Block slurs and profanity"),
+    ("everyone", "@everyone", "Block unauthorized @everyone / @here"),
+    ("mention", "Mass Mention", "Block messages with many mentions"),
+    ("spam", "Spam", "Block fast repeated messages"),
+    ("invites", "Invite Links", "Block Discord invite links"),
+    ("links", "All Links", "Block any external link"),
+    ("caps", "Excessive Caps", "Block messages that are mostly caps"),
+    ("status", "Custom Status", "Act on invite links, scam links and filtered words in custom statuses"),
+]
+AM_FILTER_KEYS = [k for k, _, _ in AM_FILTERS]
+AM_ACTIONS = [
+    ("delete", "Delete only"),
+    ("warn", "Delete + Warn"),
+    ("mute", "Delete + Mute"),
+    ("kick", "Delete + Kick"),
+    ("ban", "Delete + Ban"),
+]
+AM_ACTION_LABELS = dict(AM_ACTIONS)
+AM_DEFAULT_WORDS = [
+    "fuck*", "fuk", "shit*", "bitch*", "asshole*", "bastard*", "cunt*", "dickhead*", "motherfucker*",
+    "slut*", "whore*", "nigger*", "nigga*", "faggot*", "fag", "retard*", "tranny", "kys",
+    "putangina", "putang ina", "tangina", "tang ina", "gago", "ulol", "pakyu", "tarantado", "pakshet", "puta", "bobo", "tanga",
+]
+AM_LEET = str.maketrans({"0": "o", "1": "i", "3": "e", "4": "a", "5": "s", "7": "t", "@": "a", "$": "s"})
+AM_SCAM_RE = re.compile(
+    r"(?:discord\.gift|discordapp\.gift|steamcommunity\.com/gift|free\s+nitro|nitro\s+(?:for\s+free|gift)|claim\s+(?:your\s+)?(?:free\s+)?(?:nitro|gift)|disc[o0]rd[a-z\-]*\.(?:gift|gifts|click|ru))",
+    re.I
+)
+AM_CACHE = {"key": None, "regex": None}
+AM_STATUS_SEEN = {}
+
+
+def am_cfg() -> dict:
+    store = config.setdefault("automod", {})
+    defaults = {
+        "enabled": True,
+        "action": "delete",
+        "mute_minutes": 10,
+        "words": [],
+        "log": 0,
+        "filters": {},
+        "exempt_roles": [],
+        "exempt_channels": [],
+        "caps_ratio": 70,
+        "caps_min": 10,
+    }
+    for key, value in defaults.items():
+        store.setdefault(key, value)
+    for key in ("badwords", "everyone", "caps", "status"):
+        store["filters"].setdefault(key, False)
+    return store
+
+
+def am_get(key: str) -> bool:
+    if key == "mention":
+        return sec_cfg("antimention")["enabled"]
+    if key == "spam":
+        return sec_cfg("antispam")["enabled"]
+    if key == "invites":
+        link = sec_cfg("antilink")
+        return link["enabled"] and link["invites"]
+    if key == "links":
+        link = sec_cfg("antilink")
+        return link["enabled"] and link["links"]
+    return bool(am_cfg()["filters"].get(key))
+
+
+def am_set(key: str, state: bool):
+    if key == "mention":
+        sec_cfg("antimention")["enabled"] = state
+    elif key == "spam":
+        sec_cfg("antispam")["enabled"] = state
+    elif key in ("invites", "links"):
+        link = sec_cfg("antilink")
+        link[key] = state
+        link["enabled"] = bool(link["invites"] or link["links"])
+    else:
+        am_cfg()["filters"][key] = state
+    save_config(config)
+
+
+def am_can(member) -> bool:
+    perms = member.guild_permissions
+    return perms.administrator or perms.manage_guild or is_trusted(member.guild, member.id)
+
+
+async def am_guard(interaction: discord.Interaction) -> bool:
+    if isinstance(interaction.user, discord.Member) and am_can(interaction.user):
+        return True
+    await interaction.response.send_message(view=err("You need the Manage Server permission to use this."), ephemeral=True)
+    return False
+
+
+def am_dot(on: bool) -> str:
+    return "🟢" if on else "🔴"
+
+
+def am_normalize(text: str) -> str:
+    decomposed = unicodedata.normalize("NFKD", (text or "").lower())
+    stripped = "".join(c for c in decomposed if not unicodedata.combining(c))
+    return stripped.translate(AM_LEET)
+
+
+def am_word_regex(words: list):
+    key = tuple(words)
+    if AM_CACHE["key"] != key:
+        parts = []
+        for word in words:
+            w = am_normalize(word.strip())
+            if not w:
+                continue
+            if w.endswith("*"):
+                parts.append(re.escape(w[:-1]) + r"[a-z0-9]*")
+            else:
+                parts.append(re.escape(w))
+        AM_CACHE["key"] = key
+        AM_CACHE["regex"] = re.compile(r"(?<![a-z0-9])(?:" + "|".join(parts) + r")(?![a-z0-9])") if parts else None
+    return AM_CACHE["regex"]
+
+
+def am_has_bad_word(text: str) -> bool:
+    regex = am_word_regex(AM_DEFAULT_WORDS + am_cfg()["words"])
+    if regex is None:
+        return False
+    norm = am_normalize(text)
+    squashed = re.sub(r"(.)\1{2,}", r"\1", norm)
+    return bool(regex.search(norm) or regex.search(squashed))
+
+
+def am_scan_status(text: str):
+    if INVITE_RE.search(text):
+        return "an invite link"
+    if AM_SCAM_RE.search(text):
+        return "a scam link"
+    if am_has_bad_word(text):
+        return "a filtered word"
+    return None
+
+
+def am_parse_words(text: str) -> list:
+    found = []
+    for raw in re.split(r"[,\n]", text or ""):
+        w = raw.strip().lower()
+        if 1 <= len(w) <= 50 and w not in found:
+            found.append(w)
+    return found
+
+
+def automod_exempt(member, channel=None) -> bool:
+    perms = member.guild_permissions
+    if perms.administrator or perms.manage_messages:
+        return True
+    if mx_is_staff_member(member):
+        return True
+    if is_trusted(member.guild, member.id):
+        return True
+    cfg = am_cfg()
+    if any(r.id in cfg["exempt_roles"] for r in member.roles):
+        return True
+    if channel is not None:
+        ids = {channel.id}
+        for attr in ("category_id", "parent_id"):
+            value = getattr(channel, attr, None)
+            if value:
+                ids.add(value)
+        if ids & set(cfg["exempt_channels"]):
+            return True
+    return False
+
+
+async def am_log(guild, title: str, body: str):
+    channel_id = am_cfg()["log"]
+    channel = guild.get_channel(channel_id) if channel_id else None
+    if channel is not None:
+        try:
+            await channel.send(view=LogView(title, body), allowed_mentions=NO_MENTIONS)
+            return
+        except Exception:
+            pass
+    await send_security(guild, title, body, ping=False)
+
+
+async def am_member_action(guild, member, rule: str) -> str:
+    cfg = am_cfg()
+    action = cfg["action"]
+    reason = f"AutoMod: {rule}"
+    try:
+        if action == "warn":
+            warns = config.setdefault("warns", {}).setdefault(str(member.id), [])
+            warns.append({"reason": reason, "timestamp": int(time.time()), "moderator_id": bot.user.id})
+            save_config(config)
+            await log_mod(guild, "Warn", bot.user, member, reason, f"**Total Warns:** {len(warns)}")
+            return f"\n**Warn:** #{len(warns)}"
+        if action == "mute":
+            minutes = cfg["mute_minutes"]
+            mark_action("timeout", member.id)
+            await member.timeout(discord.utils.utcnow() + timedelta(minutes=minutes), reason=reason)
+            await log_mod(guild, "Timeout", bot.user, member, reason, f"**Duration:** {minutes} minute(s)")
+            return f"\n**Timeout:** {minutes} minute(s)"
+        if action == "kick":
+            mark_action("kick", member.id)
+            await member.kick(reason=reason)
+            await log_mod(guild, "Kick", bot.user, member, reason)
+            return "\n**Kick:** done"
+        if action == "ban":
+            mark_action("ban", member.id)
+            await guild.ban(member, reason=reason, delete_message_days=0)
+            await log_mod(guild, "Ban", bot.user, member, reason)
+            return "\n**Ban:** done"
+    except Exception:
+        return f"\n**{AM_ACTION_LABELS[action]}:** failed (check bot permissions)"
+    mx_record("AutoMod", bot.user)
+    return ""
+
+
+async def automod_punish(message, rule: str, detail: str, purge_recent: bool = False):
+    guild = message.guild
+    member = message.author
+    try:
+        await message.delete()
+    except Exception:
+        pass
+    if purge_recent:
+        try:
+            mark_action("purge", message.channel.id)
+            await message.channel.purge(
+                limit=25,
+                check=lambda m: m.author.id == member.id,
+                after=discord.utils.utcnow() - timedelta(seconds=60)
+            )
+        except Exception:
+            pass
+    result = await am_member_action(guild, member, rule)
+    try:
+        sent = await message.channel.send(view=InfoView(f"🛡️ AutoMod — {rule}", f"{member.mention}, {detail}"))
+        asyncio.create_task(delete_after(sent, 6))
+    except Exception:
+        pass
+    await am_log(
+        guild,
+        f"🛡️ AutoMod — {rule}",
+        f"**User:** {fmt_ref(member)}\n**Channel:** {message.channel.mention}\n**Action:** {AM_ACTION_LABELS[am_cfg()['action']]}{result}\n\n**Content**\n{quote(message.content or '(empty)', 600)}"
+    )
+
+
+async def automod_check(message, edited: bool = False) -> bool:
+    if not isinstance(message.author, discord.Member) or message.guild is None or message.guild.id != GUILD_ID:
+        return False
+    cfg = am_cfg()
+    if not cfg["enabled"]:
+        return False
+    if automod_exempt(message.author, message.channel):
+        return False
+    content = message.content or ""
+    if am_get("invites") and INVITE_RE.search(content):
+        await automod_punish(message, "Invite Links", "invite links are not allowed here.")
+        return True
+    if am_get("links") and LINK_RE.search(content):
+        await automod_punish(message, "All Links", "links are not allowed here.")
+        return True
+    if am_get("everyone") and re.search(r"@(everyone|here)", content):
+        if not message.channel.permissions_for(message.author).mention_everyone:
+            await automod_punish(message, "@everyone", "you can't use @everyone or @here.")
+            return True
+    if am_get("mention"):
+        limit = sec_cfg("antimention")["limit"]
+        count = len({m.id for m in message.mentions}) + len(message.role_mentions)
+        if count >= limit:
+            await automod_punish(message, "Mass Mention", f"mass mentions are not allowed ({count} mentions).")
+            return True
+    if am_get("spam") and not edited:
+        spam_cfg = sec_cfg("antispam")
+        now = time.time()
+        dq = spam_tracker.setdefault(message.author.id, deque())
+        dq.append(now)
+        while dq and now - dq[0] > spam_cfg["window"]:
+            dq.popleft()
+        if len(dq) >= spam_cfg["messages"]:
+            dq.clear()
+            await automod_punish(message, "Spam", f"slow down — {spam_cfg['messages']}+ messages in {spam_cfg['window']}s.", purge_recent=True)
+            return True
+    if am_get("caps"):
+        clean = re.sub(r"<[^>]+>|https?://\S+", "", content)
+        letters = [c for c in clean if c.isalpha()]
+        if len(letters) >= cfg["caps_min"] and sum(1 for c in letters if c.isupper()) * 100 >= cfg["caps_ratio"] * len(letters):
+            await automod_punish(message, "Excessive Caps", "please don't type in all caps.")
+            return True
+    if am_get("badwords") and am_has_bad_word(content):
+        await automod_punish(message, "Bad Words", "that language is not allowed here.")
+        return True
+    return False
+
+
+def am_status_text(member) -> str:
+    for activity in member.activities:
+        if isinstance(activity, discord.CustomActivity):
+            parts = [activity.name or "", str(activity.emoji) if activity.emoji else ""]
+            return " ".join(p for p in parts if p).strip()
+    return ""
+
+
+@bot.event
+async def on_presence_update(before, after):
+    guild = getattr(after, "guild", None)
+    if guild is None or guild.id != GUILD_ID or after.bot:
+        return
+    cfg = am_cfg()
+    if not cfg["enabled"] or not cfg["filters"]["status"]:
+        return
+    text = am_status_text(after)
+    if not text:
+        AM_STATUS_SEEN.pop(after.id, None)
+        return
+    if AM_STATUS_SEEN.get(after.id) == text:
+        return
+    AM_STATUS_SEEN[after.id] = text
+    if automod_exempt(after):
+        return
+    found = am_scan_status(text)
+    if not found:
+        return
+    result = await am_member_action(guild, after, "Custom Status")
+    await am_log(
+        guild,
+        "🛡️ AutoMod — Custom Status",
+        f"**User:** {fmt_ref(after)}\n**Detail:** custom status contains {found}\n**Action:** {AM_ACTION_LABELS[cfg['action']]}{result}\n\n**Status**\n{quote(text, 400)}"
+    )
+
+
+class AmButton(discord.ui.Button):
+    def __init__(self, label: str, style, handler):
+        super().__init__(label=label, style=style)
+        self.handler = handler
+
+    async def callback(self, interaction: discord.Interaction):
+        if not await am_guard(interaction):
+            return
+        await self.handler(interaction)
+
+
+class AmSelect(discord.ui.Select):
+    def __init__(self, placeholder: str, options: list, handler):
+        super().__init__(placeholder=placeholder, options=options, min_values=1, max_values=1)
+        self.handler = handler
+
+    async def callback(self, interaction: discord.Interaction):
+        if not await am_guard(interaction):
+            return
+        await self.handler(interaction, self.values[0])
+
+
+class AmRoleSelect(discord.ui.RoleSelect):
+    def __init__(self, placeholder: str, defaults: list, handler):
+        super().__init__(placeholder=placeholder, min_values=0, max_values=25, default_values=defaults)
+        self.handler = handler
+
+    async def callback(self, interaction: discord.Interaction):
+        if not await am_guard(interaction):
+            return
+        await self.handler(interaction, [r.id for r in self.values])
+
+
+class AmChannelSelect(discord.ui.ChannelSelect):
+    def __init__(self, placeholder: str, defaults: list, handler, types: list, max_values: int = 25):
+        super().__init__(placeholder=placeholder, channel_types=types, min_values=0, max_values=max_values, default_values=defaults)
+        self.handler = handler
+
+    async def callback(self, interaction: discord.Interaction):
+        if not await am_guard(interaction):
+            return
+        await self.handler(interaction, [c.id for c in self.values])
+
+
+class AmWordsModal(discord.ui.Modal):
+    def __init__(self, adding: bool):
+        super().__init__(title="Add Words" if adding else "Remove Words")
+        self.adding = adding
+        self.words = discord.ui.TextInput(
+            label="Words (comma or new line separated)",
+            style=discord.TextStyle.paragraph,
+            max_length=1500,
+            required=True
+        )
+        self.add_item(self.words)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        if not await am_guard(interaction):
+            return
+        cfg = am_cfg()
+        parsed = am_parse_words(self.words.value)
+        if self.adding:
+            for w in parsed:
+                if w not in cfg["words"] and len(cfg["words"]) < 200:
+                    cfg["words"].append(w)
+        else:
+            cfg["words"] = [w for w in cfg["words"] if w not in parsed]
+        save_config(config)
+        await interaction.response.edit_message(view=AutoModExemptView(interaction.guild))
+
+
+def am_status_note() -> str:
+    if am_cfg()["filters"]["status"] and not bot.intents.presences:
+        return "\n-# Custom Status needs the Presence Intent. Enable it in the Developer Portal and set PRESENCE_INTENT=1."
+    return ""
+
+
+class AutoModView(discord.ui.LayoutView):
+    def __init__(self, guild):
+        super().__init__(timeout=600)
+        cfg = am_cfg()
+        enabled = cfg["enabled"]
+        log = f"<#{cfg['log']}>" if cfg["log"] else "*none*"
+        header = (
+            f"## AutoMod {am_dot(enabled)} {'Enabled' if enabled else 'Disabled'}\n"
+            f"Action on violation: `{AM_ACTION_LABELS[cfg['action']]}` · Custom words: {len(cfg['words'])} · Log: {log}"
+        )
+        lines = "\n".join(f"{am_dot(am_get(k))} **{label}**: {desc}" for k, label, desc in AM_FILTERS)
+        hint = "-# Toggle filters below. Add words with `/automod addword`, set punishment with `/automod action`." + am_status_note()
+
+        async def toggle_enabled(interaction):
+            am_cfg()["enabled"] = not am_cfg()["enabled"]
+            save_config(config)
+            await interaction.response.edit_message(view=AutoModView(interaction.guild))
+
+        async def open_exempt(interaction):
+            await interaction.response.edit_message(view=AutoModExemptView(interaction.guild))
+
+        async def toggle_filter(interaction, key):
+            am_set(key, not am_get(key))
+            await interaction.response.edit_message(view=AutoModView(interaction.guild))
+
+        async def set_action(interaction, key):
+            am_cfg()["action"] = key
+            save_config(config)
+            await interaction.response.edit_message(view=AutoModView(interaction.guild))
+
+        async def back(interaction):
+            await interaction.response.edit_message(view=ModulesView(interaction.guild))
+
+        filter_options = [
+            discord.SelectOption(label=label, value=key, description="ON" if am_get(key) else "OFF")
+            for key, label, _ in AM_FILTERS
+        ]
+        action_options = [
+            discord.SelectOption(label=label, value=key, default=key == cfg["action"])
+            for key, label in AM_ACTIONS
+        ]
+        self.add_item(
+            discord.ui.Container(
+                discord.ui.TextDisplay(header),
+                discord.ui.Separator(),
+                discord.ui.TextDisplay(lines),
+                discord.ui.Separator(),
+                discord.ui.TextDisplay(hint),
+                discord.ui.ActionRow(
+                    AmButton("Disable" if enabled else "Enable", discord.ButtonStyle.danger if enabled else discord.ButtonStyle.success, toggle_enabled),
+                    AmButton("Exemptions & Words", discord.ButtonStyle.secondary, open_exempt)
+                ),
+                discord.ui.ActionRow(AmSelect("Toggle a filter...", filter_options, toggle_filter)),
+                discord.ui.ActionRow(AmSelect("Set punishment...", action_options, set_action)),
+                discord.ui.ActionRow(AmButton("Back to Modules", discord.ButtonStyle.secondary, back))
+            )
+        )
+
+
+class AutoModExemptView(discord.ui.LayoutView):
+    def __init__(self, guild):
+        super().__init__(timeout=600)
+        cfg = am_cfg()
+        roles = [r for r in (guild.get_role(i) for i in cfg["exempt_roles"]) if r is not None][:25]
+        channels = [c for c in (guild.get_channel(i) for i in cfg["exempt_channels"]) if c is not None][:25]
+        log_channel = guild.get_channel(cfg["log"]) if cfg["log"] else None
+        role_text = " ".join(r.mention for r in roles) or "*none*"
+        channel_text = " ".join(c.mention for c in channels) or "*none*"
+        words_text = ", ".join(f"`{w}`" for w in cfg["words"]) or "*none*"
+        body = (
+            f"**Exempt roles:** {role_text}\n"
+            f"**Exempt channels:** {channel_text}\n"
+            f"**Custom words ({len(cfg['words'])}):** {clip(words_text, 900)}\n"
+            f"**Log channel:** {log_channel.mention if log_channel else '*none*'}\n"
+            f"**Mute length:** {cfg['mute_minutes']} minute(s)"
+        )
+
+        async def set_roles(interaction, ids):
+            am_cfg()["exempt_roles"] = ids
+            save_config(config)
+            await interaction.response.edit_message(view=AutoModExemptView(interaction.guild))
+
+        async def set_channels(interaction, ids):
+            am_cfg()["exempt_channels"] = ids
+            save_config(config)
+            await interaction.response.edit_message(view=AutoModExemptView(interaction.guild))
+
+        async def set_log(interaction, ids):
+            am_cfg()["log"] = ids[0] if ids else 0
+            save_config(config)
+            await interaction.response.edit_message(view=AutoModExemptView(interaction.guild))
+
+        async def add_words(interaction):
+            await interaction.response.send_modal(AmWordsModal(True))
+
+        async def remove_words(interaction):
+            await interaction.response.send_modal(AmWordsModal(False))
+
+        async def back(interaction):
+            await interaction.response.edit_message(view=AutoModView(interaction.guild))
+
+        exempt_types = [discord.ChannelType.text, discord.ChannelType.voice, discord.ChannelType.category, discord.ChannelType.news, discord.ChannelType.forum]
+        self.add_item(
+            discord.ui.Container(
+                discord.ui.TextDisplay("## AutoMod: Exemptions & Words"),
+                discord.ui.Separator(),
+                discord.ui.TextDisplay(body),
+                discord.ui.Separator(),
+                discord.ui.ActionRow(AmRoleSelect("Exempt roles...", roles, set_roles)),
+                discord.ui.ActionRow(AmChannelSelect("Exempt channels...", channels, set_channels, exempt_types)),
+                discord.ui.ActionRow(AmChannelSelect("Log channel...", [log_channel] if log_channel else [], set_log, [discord.ChannelType.text], 1)),
+                discord.ui.ActionRow(
+                    AmButton("Add Words", discord.ButtonStyle.secondary, add_words),
+                    AmButton("Remove Words", discord.ButtonStyle.secondary, remove_words),
+                    AmButton("Back", discord.ButtonStyle.primary, back)
+                )
+            )
+        )
+
+
+class ModulesView(discord.ui.LayoutView):
+    def __init__(self, guild):
+        super().__init__(timeout=600)
+        lines = [
+            f"{am_dot(am_cfg()['enabled'])} **AutoMod**: Filters, punishments and exemptions",
+            f"{am_dot(sec_cfg('antiraid')['enabled'])} **Anti-Raid**: Detect and stop join raids",
+            f"{am_dot(sec_cfg('antinuke')['enabled'])} **Anti-Nuke**: Stop mass deletions and unauthorized changes",
+        ]
+
+        async def open_automod(interaction):
+            await interaction.response.edit_message(view=AutoModView(interaction.guild))
+
+        async def open_security(interaction):
+            await interaction.response.send_message(view=security_status_view(interaction.guild), ephemeral=True)
+
+        self.add_item(
+            discord.ui.Container(
+                discord.ui.TextDisplay("## Modules\nPick a module to configure."),
+                discord.ui.Separator(),
+                discord.ui.TextDisplay("\n".join(lines)),
+                discord.ui.Separator(),
+                discord.ui.ActionRow(
+                    AmButton("AutoMod", discord.ButtonStyle.primary, open_automod),
+                    AmButton("Security Status", discord.ButtonStyle.secondary, open_security)
+                )
+            )
+        )
+
+
+def am_resolve_filter(text: str):
+    t = (text or "").lower().replace(" ", "").replace("-", "").replace("_", "")
+    aliases = {"profanity": "badwords", "words": "badwords", "mentions": "mention", "massmention": "mention", "invite": "invites", "link": "links", "alllinks": "links", "invitelinks": "invites", "capslock": "caps", "excessivecaps": "caps", "customstatus": "status"}
+    t = aliases.get(t, t)
+    return t if t in AM_FILTER_KEYS else None
+
+
+def am_do_toggle(enabled: bool):
+    am_cfg()["enabled"] = enabled
+    save_config(config)
+    return ok("AutoMod", f"AutoMod is now **{'enabled' if enabled else 'disabled'}**.")
+
+
+def am_do_action(key: str):
+    key = (key or "").lower().replace("delete +", "").replace("delete only", "delete").strip()
+    if key not in AM_ACTION_LABELS:
+        return err("Action must be one of: delete, warn, mute, kick, ban.")
+    am_cfg()["action"] = key
+    save_config(config)
+    return ok("AutoMod Punishment", f"Action on violation: **{AM_ACTION_LABELS[key]}**")
+
+
+def am_do_mute(minutes: int):
+    minutes = clamp(minutes, 1, 40320)
+    am_cfg()["mute_minutes"] = minutes
+    save_config(config)
+    return ok("AutoMod Mute Length", f"Muted members are timed out for **{minutes}** minute(s).")
+
+
+def am_do_words(adding: bool, text: str):
+    parsed = am_parse_words(text)
+    if not parsed:
+        return err("Provide at least one word.")
+    cfg = am_cfg()
+    if adding:
+        added = [w for w in parsed if w not in cfg["words"]][: max(0, 200 - len(cfg["words"]))]
+        cfg["words"].extend(added)
+        save_config(config)
+        return ok("Words Added", f"Added **{len(added)}** word(s). Total custom words: {len(cfg['words'])}")
+    before = len(cfg["words"])
+    cfg["words"] = [w for w in cfg["words"] if w not in parsed]
+    save_config(config)
+    return ok("Words Removed", f"Removed **{before - len(cfg['words'])}** word(s). Total custom words: {len(cfg['words'])}")
+
+
+def am_do_list_words():
+    words = am_cfg()["words"]
+    return ok("Custom Words", clip(", ".join(f"`{w}`" for w in words), 3500) if words else "No custom words yet. Wildcards work with `word*`.")
+
+
+def am_do_log(channel):
+    am_cfg()["log"] = channel.id if channel else 0
+    save_config(config)
+    return ok("AutoMod Log", f"Log channel: {channel.mention}" if channel else "Log channel removed. Alerts go to the security log.")
+
+
+def am_do_filter(key: str, state: bool):
+    am_set(key, state)
+    label = next(l for k, l, _ in AM_FILTERS if k == key)
+    return ok("AutoMod Filter", f"**{label}** is now **{'on' if state else 'off'}**." + am_status_note())
+
+
+def am_do_exempt(role=None, channel=None):
+    cfg = am_cfg()
+    if role is not None:
+        ids = cfg["exempt_roles"]
+        target, label = role.id, role.mention
+    elif channel is not None:
+        ids = cfg["exempt_channels"]
+        target, label = channel.id, channel.mention
+    else:
+        return err("Provide a role or a channel.")
+    if target in ids:
+        ids.remove(target)
+        state = "no longer exempt"
+    else:
+        ids.append(target)
+        state = "now exempt"
+    save_config(config)
+    return ok("AutoMod Exemption", f"{label} is {state}.")
+
+
+async def am_prefix(message: discord.Message, cmd: str, args: list) -> bool:
+    if cmd not in ("automod", "modules"):
+        return False
+    send = message.channel.send
+    if not am_can(message.author):
+        await send(view=err("You need the Manage Server permission to use this."))
+        return True
+    if cmd == "modules":
+        await send(view=ModulesView(message.guild))
+        return True
+    sub = args[1].lower() if len(args) > 1 else "panel"
+    rest = " ".join(args[2:])
+    usage = f"Usage: `{PREFIX}automod [on|off|action|mute|addword|removeword|words|log|filter|exempt]`"
+    if sub in ("panel", "menu"):
+        await send(view=AutoModView(message.guild))
+    elif sub in ("on", "enable"):
+        await send(view=am_do_toggle(True))
+    elif sub in ("off", "disable"):
+        await send(view=am_do_toggle(False))
+    elif sub == "action":
+        await send(view=am_do_action(rest) if rest else err(f"Usage: `{PREFIX}automod action <delete|warn|mute|kick|ban>`"))
+    elif sub == "mute":
+        await send(view=am_do_mute(int(args[2])) if len(args) > 2 and args[2].isdigit() else err(f"Usage: `{PREFIX}automod mute <minutes>`"))
+    elif sub in ("addword", "removeword"):
+        await send(view=am_do_words(sub == "addword", rest) if rest else err(f"Usage: `{PREFIX}automod {sub} <word, word>`"))
+    elif sub == "words":
+        await send(view=am_do_list_words())
+    elif sub == "log":
+        if rest.lower() in ("off", "none", "remove"):
+            await send(view=am_do_log(None))
+        elif message.channel_mentions:
+            await send(view=am_do_log(message.channel_mentions[0]))
+        else:
+            await send(view=err(f"Usage: `{PREFIX}automod log #channel|off`"))
+    elif sub == "filter":
+        key = am_resolve_filter(args[2]) if len(args) > 2 else None
+        state = args[3].lower() if len(args) > 3 else ""
+        if key is None or state not in ("on", "off"):
+            await send(view=err(f"Usage: `{PREFIX}automod filter <{'|'.join(AM_FILTER_KEYS)}> <on|off>`"))
+        else:
+            await send(view=am_do_filter(key, state == "on"))
+    elif sub == "exempt":
+        if message.role_mentions or message.channel_mentions:
+            await send(view=am_do_exempt(mx_first(message.role_mentions), mx_first(message.channel_mentions)))
+        else:
+            await send(view=err(f"Usage: `{PREFIX}automod exempt @role|#channel` (run again to remove)"))
+    else:
+        await send(view=err(usage))
+    return True
+
+
+automod_group = discord.app_commands.Group(
+    name="automod",
+    description="Configure AutoMod",
+    default_permissions=discord.Permissions(manage_guild=True)
+)
+AM_ACTION_CHOICES = [discord.app_commands.Choice(name=label, value=key) for key, label in AM_ACTIONS]
+AM_FILTER_CHOICES = [discord.app_commands.Choice(name=label, value=key) for key, label, _ in AM_FILTERS]
+
+
+async def am_slash_send(interaction: discord.Interaction, view, ephemeral: bool = False):
+    if not isinstance(interaction.user, discord.Member) or not am_can(interaction.user):
+        await interaction.response.send_message(view=err("You need the Manage Server permission to use this."), ephemeral=True)
+        return
+    await interaction.response.send_message(view=view, ephemeral=ephemeral)
+
+
+@automod_group.command(name="panel", description="Open the AutoMod panel")
+async def am_slash_panel(interaction: discord.Interaction):
+    await am_slash_send(interaction, AutoModView(interaction.guild))
+
+
+@automod_group.command(name="toggle", description="Enable or disable AutoMod")
+@discord.app_commands.describe(enabled="Turn AutoMod on or off")
+async def am_slash_toggle(interaction: discord.Interaction, enabled: bool):
+    if not am_can(interaction.user):
+        return await am_slash_send(interaction, None)
+    await am_slash_send(interaction, am_do_toggle(enabled))
+
+
+@automod_group.command(name="action", description="Set the punishment for violations")
+@discord.app_commands.describe(action="What happens when someone breaks a filter")
+@discord.app_commands.choices(action=AM_ACTION_CHOICES)
+async def am_slash_action(interaction: discord.Interaction, action: discord.app_commands.Choice[str]):
+    if not am_can(interaction.user):
+        return await am_slash_send(interaction, None)
+    await am_slash_send(interaction, am_do_action(action.value))
+
+
+@automod_group.command(name="mute", description="Set how long Delete + Mute times people out")
+@discord.app_commands.describe(minutes="Timeout length in minutes")
+async def am_slash_mute(interaction: discord.Interaction, minutes: int):
+    if not am_can(interaction.user):
+        return await am_slash_send(interaction, None)
+    await am_slash_send(interaction, am_do_mute(minutes))
+
+
+@automod_group.command(name="addword", description="Add custom filtered words")
+@discord.app_commands.describe(words="Words separated by commas. Use word* for wildcards")
+async def am_slash_addword(interaction: discord.Interaction, words: str):
+    if not am_can(interaction.user):
+        return await am_slash_send(interaction, None)
+    await am_slash_send(interaction, am_do_words(True, words), True)
+
+
+@automod_group.command(name="removeword", description="Remove custom filtered words")
+@discord.app_commands.describe(words="Words separated by commas")
+async def am_slash_removeword(interaction: discord.Interaction, words: str):
+    if not am_can(interaction.user):
+        return await am_slash_send(interaction, None)
+    await am_slash_send(interaction, am_do_words(False, words), True)
+
+
+@automod_group.command(name="words", description="List custom filtered words")
+async def am_slash_words(interaction: discord.Interaction):
+    if not am_can(interaction.user):
+        return await am_slash_send(interaction, None)
+    await am_slash_send(interaction, am_do_list_words(), True)
+
+
+@automod_group.command(name="log", description="Set the AutoMod log channel")
+@discord.app_commands.describe(channel="Log channel (leave empty to remove)")
+async def am_slash_log(interaction: discord.Interaction, channel: discord.TextChannel = None):
+    if not am_can(interaction.user):
+        return await am_slash_send(interaction, None)
+    await am_slash_send(interaction, am_do_log(channel))
+
+
+@automod_group.command(name="filter", description="Turn a single filter on or off")
+@discord.app_commands.describe(filter="Filter to change", enabled="On or off")
+@discord.app_commands.choices(filter=AM_FILTER_CHOICES)
+async def am_slash_filter(interaction: discord.Interaction, filter: discord.app_commands.Choice[str], enabled: bool):
+    if not am_can(interaction.user):
+        return await am_slash_send(interaction, None)
+    await am_slash_send(interaction, am_do_filter(filter.value, enabled))
+
+
+@automod_group.command(name="exempt", description="Toggle a role or channel as exempt from AutoMod")
+@discord.app_commands.describe(role="Role to exempt or un-exempt", channel="Channel to exempt or un-exempt")
+async def am_slash_exempt(interaction: discord.Interaction, role: discord.Role = None, channel: discord.TextChannel = None):
+    if not am_can(interaction.user):
+        return await am_slash_send(interaction, None)
+    await am_slash_send(interaction, am_do_exempt(role, channel))
+
+
+tree.add_command(automod_group, guild=discord.Object(id=GUILD_ID))
+
+
+@tree.command(name="modules", description="Open the modules menu", guild=GUILD_OBJ)
+@discord.app_commands.default_permissions(manage_guild=True)
+async def modules_slash(interaction: discord.Interaction):
+    await am_slash_send(interaction, ModulesView(interaction.guild))
 
 
 @bot.event
