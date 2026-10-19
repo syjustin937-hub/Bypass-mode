@@ -7,6 +7,24 @@ import os
 import re
 import random
 import time
+import hashlib
+import base64
+import unicodedata
+import ipaddress
+import difflib
+import secrets
+import math
+import ast
+import operator
+import socket
+import ssl
+import sys
+import uuid
+import string
+import http
+import platform
+import colorsys
+import codecs
 from collections import deque, Counter
 from datetime import datetime, timezone, timedelta
 from io import BytesIO
@@ -271,16 +289,74 @@ class GiveawayPersistentView(discord.ui.View):
 
 HELP_PAGES = [
     (
-        "Utility",
-        "`.ping`\n"
-        "`.say <message>`\n"
-        "`.embed`\n"
-        "`.afk [reason]`\n"
-        "`.snipe`\n"
-        "`.avatar [@user]`\n"
-        "`.bypass <link>`\n"
-        "`.steal <emoji>`\n"
-        "`.help`"
+        "Information",
+        "`.userinfo [@user]` View info about a user\n"
+        "`.serverinfo` View info about this server\n"
+        "`.roleinfo <role>` View info about a role\n"
+        "`.channelinfo [#channel]` View info about a channel\n"
+        "`.inviteinfo <invite>` Inspect a Discord invite\n"
+        "`.avatar [@user]` Get a user's avatar\n"
+        "`.banner [@user]` Get a user's banner\n"
+        "`.botinfo` View bot information\n"
+        "`.stats` View server and bot stats\n"
+        "`.ping` Check bot latency"
+    ),
+    (
+        "Tools",
+        "`.qr <text>` Generate a QR code\n"
+        "`.translate <lang> <text>` Translate text\n"
+        "`.color <hex|rgb|name>` Info about a color\n"
+        "`.math <expression>` Evaluate math\n"
+        "`.timestamp [time]` Discord timestamp formats\n"
+        "`.snipe` Last deleted message\n"
+        "`.afk [reason]` Set your AFK status\n"
+        "`.urban <word>` Urban Dictionary lookup\n"
+        "`.steal <emoji>` Copy a custom emoji\n"
+        "`.stealsticker` Copy a sticker (reply to it)"
+    ),
+    (
+        "More",
+        "`.say <message>` Send a message as the bot\n"
+        "`.embed` Open the container builder\n"
+        "`.bypass <link>` Bypass a link\n"
+        "`.emojis` List all server emojis\n"
+        "`.activity <name>` Start a voice activity\n"
+        "`.ascii <text>` Fancy Unicode fonts\n"
+        "`.base <num> <from> [to]` Convert number bases\n"
+        "`.base32` `.base64` `.binary` Encode or decode\n"
+        "`.char <text>` Unicode character info\n"
+        "`.cidr <ip/prefix>` Subnet calculator\n"
+        "`.counting setup #channel` Counting game\n"
+        "`.todo` Your personal todo list\n"
+        "`.help` Show this menu"
+    ),
+    (
+        "Network & Dev",
+        "`.diff <a> | <b>` Difference between two texts\n"
+        "`.dns <domain> [type]` DNS records\n"
+        "`.entropy <text>` Password strength estimate\n"
+        "`.expand <link>` Unshorten a URL\n"
+        "`.hash <text>` Hash with common algorithms\n"
+        "`.httpstatus <code>` What an HTTP code means\n"
+        "`.iban <iban>` Validate an IBAN\n"
+        "`.ip <ip|domain>` IP geolocation\n"
+        "`.json <json>` Validate and pretty-print JSON\n"
+        "`.jwt <token>` Decode a JWT"
+    ),
+    (
+        "Text & Web Tools",
+        "`.lorem [n] [words|sentences|paragraphs]` Placeholder text\n"
+        "`.morse <encode|decode> <text>` Morse code\n"
+        "`.password [length]` Secure password sent by DM\n"
+        "`.regex <pattern> | <text>` Test a regex\n"
+        "`.rot13 <text>` ROT13\n"
+        "`.slugify <text>` URL-friendly slug\n"
+        "`.sslcheck <domain>` TLS certificate and expiry\n"
+        "`.urlencode <encode|decode> <text>` Percent-encoding\n"
+        "`.useragent <string>` Parse a user agent\n"
+        "`.uuid [count]` Random UUIDs (v4)\n"
+        "`.whois <domain>` Domain registration info\n"
+        "`.wordcount <text>` Count words and characters"
     ),
     (
         "Moderation",
@@ -373,7 +449,7 @@ class HelpView(discord.ui.LayoutView):
                 discord.ui.Separator(),
                 discord.ui.TextDisplay(body),
                 discord.ui.Separator(),
-                discord.ui.TextDisplay(f"-# Prefix: `.` | Also available as `/command` | Page {self.page + 1}/{total}"),
+                discord.ui.TextDisplay(f"-# Prefix: `.` | Page {self.page + 1}/{total}"),
             )
         )
         indicator = discord.ui.Button(label=f"{self.page + 1} / {total}", style=discord.ButtonStyle.primary, disabled=True)
@@ -3165,6 +3241,8 @@ async def on_message(message):
         return
 
     if not message.content.startswith(PREFIX):
+        if message.guild and await counting_check(message):
+            return
         if message.guild and await ar_check(message):
             return
         bypass_channel_id = config.get("channel_id")
@@ -3195,6 +3273,9 @@ async def on_message(message):
         return
 
     if await economy_prefix(message, cmd, args):
+        return
+
+    if await util_prefix(message, cmd, args):
         return
 
     if cmd == "help":
@@ -5505,6 +5586,1562 @@ async def wl_prefix(message: discord.Message):
         await message.channel.send(view=TicketInfoView("Welcome System", wl_status_text(message.guild)))
     else:
         await message.channel.send(view=TicketInfoView("Welcome System", usage))
+
+
+BOT_START = time.time()
+ut_last = {}
+UT_UA = {"User-Agent": "Mozilla/5.0 (compatible; DiscordUtilityBot/1.0)"}
+UT_NO_MENTIONS = discord.AllowedMentions.none()
+
+
+def ut_rest(message: discord.Message) -> str:
+    parts = message.content[len(PREFIX):].split(None, 1)
+    return parts[1].strip() if len(parts) > 1 else ""
+
+
+def ut_code(text: str) -> str:
+    t = text.strip()
+    m = re.match(r"^```[a-zA-Z0-9_+-]*\n?(.*?)```$", t, re.S)
+    if m:
+        return m.group(1).strip()
+    return t.strip("`").strip()
+
+
+def ut_clip(text: str, n: int) -> str:
+    return text if len(text) <= n else text[: n - 1] + "…"
+
+
+def ut_block(text: str, lang: str = "") -> str:
+    return f"```{lang}\n{text.replace('```', '`​``')}\n```"
+
+
+def ut_ts(dt) -> str:
+    ts = int(dt.timestamp())
+    return f"<t:{ts}:F> (<t:{ts}:R>)"
+
+
+def ut_view(title: str, body: str, thumb: str = None, image: str = None) -> discord.ui.LayoutView:
+    view = discord.ui.LayoutView(timeout=None)
+    container = discord.ui.Container()
+    container.add_item(discord.ui.TextDisplay(f"# {ut_clip(title, 200)}"))
+    container.add_item(discord.ui.Separator())
+    body = ut_clip(body, 3500)
+    if thumb:
+        section = discord.ui.Section(accessory=discord.ui.Thumbnail(media=thumb))
+        section.add_item(discord.ui.TextDisplay(body))
+        container.add_item(section)
+    else:
+        container.add_item(discord.ui.TextDisplay(body))
+    if image:
+        gallery = discord.ui.MediaGallery()
+        gallery.add_item(media=image)
+        container.add_item(gallery)
+    view.add_item(container)
+    return view
+
+
+async def ut_send(message: discord.Message, title: str, body: str, thumb: str = None, image: str = None):
+    await message.channel.send(view=ut_view(title, body, thumb, image), allowed_mentions=UT_NO_MENTIONS)
+
+
+async def ut_fail(message: discord.Message, text: str):
+    await message.channel.send(view=tk_err(text), allowed_mentions=UT_NO_MENTIONS)
+
+
+async def ut_usage(message: discord.Message, usage: str):
+    await ut_fail(message, f"Usage: {usage}")
+
+
+async def ut_http(url: str, params: dict = None, as_json: bool = True, headers: dict = None, timeout: int = 8):
+    try:
+        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=timeout), headers=headers or UT_UA) as session:
+            async with session.get(url, params=params) as res:
+                if res.status != 200:
+                    return None
+                if as_json:
+                    return await res.json(content_type=None)
+                return await res.text()
+    except Exception:
+        return None
+
+
+async def ut_public(host: str):
+    try:
+        infos = await asyncio.get_running_loop().getaddrinfo(host, None)
+    except Exception:
+        return None
+    addrs = {i[4][0].split("%")[0] for i in infos}
+    if not addrs:
+        return None
+    for a in addrs:
+        try:
+            if not ipaddress.ip_address(a).is_global:
+                return None
+        except ValueError:
+            return None
+    return sorted(addrs)[0]
+
+
+def ut_domain(text: str):
+    t = text.strip().lower()
+    t = re.sub(r"^[a-z]+://", "", t)
+    t = t.split("/")[0].split("?")[0].split(":")[0].rstrip(".")
+    return t if re.fullmatch(r"(?:[a-z0-9-]{1,63}\.)+[a-z0-9-]{2,63}", t) else None
+
+
+def ut_reply_text(message: discord.Message) -> str:
+    ref = message.reference.resolved if message.reference else None
+    return getattr(ref, "content", "") or ""
+
+
+async def ut_member(message: discord.Message, rest: str):
+    if message.mentions:
+        return message.mentions[0]
+    token = rest.split()[0] if rest else ""
+    if token.isdigit():
+        uid = int(token)
+        m = message.guild.get_member(uid)
+        if m:
+            return m
+        try:
+            return await message.guild.fetch_member(uid)
+        except Exception:
+            try:
+                return await bot.fetch_user(uid)
+            except Exception:
+                return None
+    if token:
+        return message.guild.get_member_named(token)
+    return message.author
+
+
+def ut_human(seconds: float) -> str:
+    seconds = int(seconds)
+    units = [("y", 31536000), ("d", 86400), ("h", 3600), ("m", 60), ("s", 1)]
+    out = []
+    for name, size in units:
+        if seconds >= size:
+            out.append(f"{seconds // size}{name}")
+            seconds %= size
+    return " ".join(out[:3]) or "0s"
+
+
+async def c_userinfo(message, rest):
+    u = await ut_member(message, rest)
+    if u is None:
+        return await ut_fail(message, "User not found.")
+    lines = [
+        f"**Username:** {u}",
+        f"**Display name:** {u.display_name}",
+        f"**ID:** `{u.id}`",
+        f"**Bot:** {'Yes' if u.bot else 'No'}",
+        f"**Created:** {ut_ts(u.created_at)}",
+    ]
+    if isinstance(u, discord.Member):
+        if u.joined_at:
+            lines.append(f"**Joined:** {ut_ts(u.joined_at)}")
+        lines.append(f"**Top role:** {u.top_role.mention}")
+        roles = [r.mention for r in reversed(u.roles) if not r.is_default()]
+        if roles:
+            lines.append(f"**Roles ({len(roles)}):** {ut_clip(' '.join(roles), 600)}")
+        if u.premium_since:
+            lines.append(f"**Boosting since:** {ut_ts(u.premium_since)}")
+        if u.timed_out_until:
+            lines.append(f"**Timed out until:** {ut_ts(u.timed_out_until)}")
+    badges = [n.replace("_", " ").title() for n, v in u.public_flags if v]
+    if badges:
+        lines.append(f"**Badges:** {', '.join(badges)}")
+    await ut_send(message, "User Info", "\n".join(lines), thumb=u.display_avatar.url)
+
+
+async def c_serverinfo(message, rest):
+    g = message.guild
+    bots = sum(1 for m in g.members if m.bot)
+    lines = [
+        f"**Name:** {g.name}",
+        f"**ID:** `{g.id}`",
+        f"**Owner:** <@{g.owner_id}>",
+        f"**Created:** {ut_ts(g.created_at)}",
+        f"**Members:** {g.member_count} ({g.member_count - bots} humans, {bots} bots)",
+        f"**Channels:** {len(g.text_channels)} text, {len(g.voice_channels)} voice, {len(g.categories)} categories, {len(g.forums)} forums",
+        f"**Roles:** {len(g.roles)}",
+        f"**Emojis:** {len(g.emojis)} / {g.emoji_limit}",
+        f"**Stickers:** {len(g.stickers)} / {g.sticker_limit}",
+        f"**Boosts:** {g.premium_subscription_count} (Level {g.premium_tier})",
+        f"**Verification:** {str(g.verification_level).title()}",
+    ]
+    await ut_send(message, g.name, "\n".join(lines), thumb=g.icon.url if g.icon else None, image=g.banner.url if g.banner else None)
+
+
+def ut_find_role(guild: discord.Guild, message: discord.Message, text: str):
+    if message.role_mentions:
+        return message.role_mentions[0]
+    t = text.strip()
+    if t.isdigit():
+        return guild.get_role(int(t))
+    low = t.lower()
+    for r in guild.roles:
+        if r.name.lower() == low:
+            return r
+    return None
+
+
+async def c_roleinfo(message, rest):
+    if not rest:
+        return await ut_usage(message, "`.roleinfo <@role | role id | role name>`")
+    r = ut_find_role(message.guild, message, rest)
+    if r is None:
+        return await ut_fail(message, "Role not found.")
+    key = ["administrator", "manage_guild", "manage_roles", "manage_channels", "kick_members", "ban_members", "moderate_members", "manage_messages", "mention_everyone"]
+    perms = [p.replace("_", " ").title() for p in key if getattr(r.permissions, p)]
+    lines = [
+        f"**Name:** {r.name}",
+        f"**ID:** `{r.id}`",
+        f"**Mention:** {r.mention}",
+        f"**Color:** `#{r.color.value:06X}`",
+        f"**Position:** {r.position}",
+        f"**Members:** {len(r.members)}",
+        f"**Hoisted:** {'Yes' if r.hoist else 'No'}",
+        f"**Mentionable:** {'Yes' if r.mentionable else 'No'}",
+        f"**Managed:** {'Yes' if r.managed else 'No'}",
+        f"**Created:** {ut_ts(r.created_at)}",
+        f"**Key permissions:** {', '.join(perms) if perms else 'None'}",
+    ]
+    await ut_send(message, "Role Info", "\n".join(lines), thumb=r.icon.url if r.icon else None)
+
+
+async def c_channelinfo(message, rest):
+    ch = None
+    if message.channel_mentions:
+        ch = message.channel_mentions[0]
+    elif rest.split() and rest.split()[0].isdigit():
+        ch = message.guild.get_channel(int(rest.split()[0]))
+    elif rest:
+        ch = discord.utils.get(message.guild.channels, name=rest.lower().lstrip("#"))
+    else:
+        ch = message.channel
+    if ch is None:
+        return await ut_fail(message, "Channel not found.")
+    lines = [
+        f"**Name:** {ch.name}",
+        f"**ID:** `{ch.id}`",
+        f"**Type:** {str(ch.type).replace('_', ' ').title()}",
+        f"**Mention:** {ch.mention}",
+        f"**Created:** {ut_ts(ch.created_at)}",
+    ]
+    if getattr(ch, "category", None):
+        lines.append(f"**Category:** {ch.category.name}")
+    lines.append(f"**Position:** {ch.position}")
+    if getattr(ch, "topic", None):
+        lines.append(f"**Topic:** {ut_clip(ch.topic, 300)}")
+    if getattr(ch, "slowmode_delay", 0):
+        lines.append(f"**Slowmode:** {ch.slowmode_delay}s")
+    if hasattr(ch, "is_nsfw"):
+        lines.append(f"**NSFW:** {'Yes' if ch.is_nsfw() else 'No'}")
+    if isinstance(ch, (discord.VoiceChannel, discord.StageChannel)):
+        lines.append(f"**Bitrate:** {ch.bitrate // 1000} kbps")
+        lines.append(f"**User limit:** {ch.user_limit or 'Unlimited'}")
+    await ut_send(message, "Channel Info", "\n".join(lines))
+
+
+async def c_inviteinfo(message, rest):
+    m = re.search(r"(?:discord(?:app)?\.com/invite|discord\.gg)/([\w-]+)", rest) or re.fullmatch(r"([\w-]{2,32})", rest.strip())
+    if not m:
+        return await ut_usage(message, "`.inviteinfo <invite link or code>`")
+    try:
+        inv = await bot.fetch_invite(m.group(1), with_counts=True)
+    except Exception:
+        return await ut_fail(message, "That invite is invalid or expired.")
+    lines = [
+        f"**Code:** `{inv.code}`",
+        f"**Server:** {inv.guild.name if inv.guild else 'Unknown'}",
+        f"**Server ID:** `{inv.guild.id}`" if inv.guild else "",
+        f"**Channel:** #{inv.channel.name}" if inv.channel else "",
+        f"**Inviter:** {inv.inviter}" if inv.inviter else "",
+        f"**Members:** {inv.approximate_member_count}" if inv.approximate_member_count is not None else "",
+        f"**Online:** {inv.approximate_presence_count}" if inv.approximate_presence_count is not None else "",
+        f"**Expires:** {ut_ts(inv.expires_at)}" if inv.expires_at else "**Expires:** Never",
+    ]
+    if inv.guild and getattr(inv.guild, "description", None):
+        lines.append(f"**Description:** {ut_clip(inv.guild.description, 300)}")
+    icon = inv.guild.icon.url if inv.guild and inv.guild.icon else None
+    await ut_send(message, "Invite Info", "\n".join(x for x in lines if x), thumb=icon)
+
+
+async def c_banner(message, rest):
+    u = await ut_member(message, rest)
+    if u is None:
+        return await ut_fail(message, "User not found.")
+    try:
+        full = await bot.fetch_user(u.id)
+    except Exception:
+        return await ut_fail(message, "Could not fetch that user.")
+    if full.banner:
+        await ut_send(message, f"{full.display_name}'s Banner", f"**User:** {full.mention}", image=full.banner.url)
+    elif full.accent_color:
+        await ut_send(message, f"{full.display_name}'s Banner", f"No banner image. Accent color: `#{full.accent_color.value:06X}`")
+    else:
+        await ut_fail(message, "That user has no banner.")
+
+
+async def c_botinfo(message, rest):
+    lines = [
+        f"**Name:** {bot.user}",
+        f"**ID:** `{bot.user.id}`",
+        f"**Created:** {ut_ts(bot.user.created_at)}",
+        f"**Servers:** {len(bot.guilds)}",
+        f"**Latency:** {round(bot.latency * 1000)}ms",
+        f"**Uptime:** {ut_human(time.time() - BOT_START)}",
+        f"**Prefix:** `{PREFIX}`",
+        f"**Python:** {platform.python_version()}",
+        f"**discord.py:** {discord.__version__}",
+    ]
+    await ut_send(message, "Bot Info", "\n".join(lines), thumb=bot.user.display_avatar.url)
+
+
+async def c_stats(message, rest):
+    g = message.guild
+    bots = sum(1 for m in g.members if m.bot)
+    lines = [
+        "**Server**",
+        f"Members: {g.member_count} ({g.member_count - bots} humans, {bots} bots)",
+        f"Channels: {len(g.channels)} | Roles: {len(g.roles)} | Emojis: {len(g.emojis)}",
+        f"Boosts: {g.premium_subscription_count} (Level {g.premium_tier})",
+        "",
+        "**Bot**",
+        f"Servers: {len(bot.guilds)} | Users: {sum(x.member_count or 0 for x in bot.guilds)}",
+        f"Latency: {round(bot.latency * 1000)}ms | Uptime: {ut_human(time.time() - BOT_START)}",
+    ]
+    try:
+        import resource
+        usage = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+        mb = usage / (1024 * 1024) if sys.platform == "darwin" else usage / 1024
+        lines.append(f"Memory: {mb:.1f} MB")
+    except Exception:
+        pass
+    await ut_send(message, "Stats", "\n".join(lines))
+
+
+async def c_qr(message, rest):
+    text = rest or ut_reply_text(message)
+    if not text:
+        return await ut_usage(message, "`.qr <text or link>`")
+    if len(text) > 500:
+        return await ut_fail(message, "Text is too long (max 500 characters).")
+    url = "https://api.qrserver.com/v1/create-qr-code/?size=400x400&margin=10&data=" + urllib.parse.quote(text, safe="")
+    await ut_send(message, "QR Code", f"**Data:** {ut_clip(text, 200)}", image=url)
+
+
+UT_LANGS = {
+    "english": "en", "tagalog": "tl", "filipino": "tl", "japanese": "ja", "korean": "ko",
+    "chinese": "zh-CN", "spanish": "es", "french": "fr", "german": "de", "italian": "it",
+    "portuguese": "pt", "russian": "ru", "arabic": "ar", "hindi": "hi", "thai": "th",
+    "vietnamese": "vi", "indonesian": "id", "malay": "ms", "turkish": "tr", "dutch": "nl",
+}
+
+
+async def c_translate(message, rest):
+    parts = rest.split(None, 1)
+    if not parts:
+        return await ut_usage(message, "`.translate <language> <text>` (or reply to a message)")
+    code = UT_LANGS.get(parts[0].lower(), parts[0])
+    text = parts[1] if len(parts) > 1 else ut_reply_text(message)
+    if not text:
+        return await ut_usage(message, "`.translate <language> <text>` (or reply to a message)")
+    if not re.fullmatch(r"[A-Za-z]{2,3}(-[A-Za-z]{2,4})?", code):
+        return await ut_fail(message, "Unknown language. Use a name like `tagalog` or a code like `tl`.")
+    data = await ut_http("https://translate.googleapis.com/translate_a/single", params={"client": "gtx", "sl": "auto", "tl": code, "dt": "t", "q": text[:1500]})
+    if not data or not data[0]:
+        return await ut_fail(message, "Translation failed. Try again later.")
+    translated = "".join(seg[0] for seg in data[0] if seg and seg[0])
+    source = data[2] if len(data) > 2 and isinstance(data[2], str) else "auto"
+    await ut_send(message, "Translation", f"**{source} → {code}**\n\n{ut_clip(translated, 1800)}\n\n-# Original: {ut_clip(text, 300)}")
+
+
+UT_COLOR_NAMES = {
+    "red": "ff0000", "green": "00ff00", "blue": "0000ff", "white": "ffffff", "black": "000000",
+    "yellow": "ffff00", "orange": "ffa500", "purple": "800080", "pink": "ffc0cb", "cyan": "00ffff",
+    "magenta": "ff00ff", "gray": "808080", "grey": "808080", "brown": "a52a2a", "gold": "ffd700",
+    "blurple": "5865f2", "teal": "008080", "navy": "000080", "lime": "32cd32", "maroon": "800000",
+}
+
+
+def ut_parse_color(text: str):
+    t = text.strip().lower()
+    if t in UT_COLOR_NAMES:
+        h = UT_COLOR_NAMES[t]
+        return tuple(int(h[i:i + 2], 16) for i in (0, 2, 4))
+    m = re.fullmatch(r"(?:#|0x)?([0-9a-f]{6})", t)
+    if m:
+        h = m.group(1)
+        return tuple(int(h[i:i + 2], 16) for i in (0, 2, 4))
+    m = re.fullmatch(r"#?([0-9a-f]{3})", t)
+    if m:
+        return tuple(int(c * 2, 16) for c in m.group(1))
+    nums = re.findall(r"\d+", t)
+    if len(nums) == 3 and all(int(n) <= 255 for n in nums):
+        return tuple(int(n) for n in nums)
+    return None
+
+
+async def c_color(message, rest):
+    if not rest:
+        return await ut_usage(message, "`.color <#hex | r g b | name>`")
+    rgb = ut_parse_color(rest)
+    if rgb is None:
+        return await ut_fail(message, "Could not read that color. Try `#5865F2`, `88 101 242`, or `red`.")
+    r, g, b = rgb
+    h, l, s = colorsys.rgb_to_hls(r / 255, g / 255, b / 255)
+    hh, ss, vv = colorsys.rgb_to_hsv(r / 255, g / 255, b / 255)
+    k = 1 - max(r, g, b) / 255
+    cmyk = (0, 0, 0, round(k * 100)) if k == 1 else tuple(round((1 - c / 255 - k) / (1 - k) * 100) for c in rgb) + (round(k * 100),)
+    hexv = f"{r:02X}{g:02X}{b:02X}"
+    lines = [
+        f"**HEX:** `#{hexv}`",
+        f"**RGB:** `{r}, {g}, {b}`",
+        f"**HSL:** `{round(h * 360)}°, {round(s * 100)}%, {round(l * 100)}%`",
+        f"**HSV:** `{round(hh * 360)}°, {round(ss * 100)}%, {round(vv * 100)}%`",
+        f"**CMYK:** `{cmyk[0]}%, {cmyk[1]}%, {cmyk[2]}%, {cmyk[3]}%`",
+        f"**Decimal:** `{int(hexv, 16)}`",
+    ]
+    await ut_send(message, "Color Info", "\n".join(lines), image=f"https://singlecolorimage.com/get/{hexv}/400x120")
+
+
+UT_BINOPS = {
+    ast.Add: operator.add, ast.Sub: operator.sub, ast.Mult: operator.mul, ast.Div: operator.truediv,
+    ast.FloorDiv: operator.floordiv, ast.Mod: operator.mod, ast.Pow: operator.pow,
+}
+UT_UNOPS = {ast.USub: operator.neg, ast.UAdd: operator.pos}
+UT_FUNCS = {
+    "sqrt": math.sqrt, "sin": math.sin, "cos": math.cos, "tan": math.tan, "asin": math.asin,
+    "acos": math.acos, "atan": math.atan, "log": math.log, "log10": math.log10, "log2": math.log2,
+    "abs": abs, "round": round, "floor": math.floor, "ceil": math.ceil, "factorial": math.factorial,
+    "exp": math.exp, "radians": math.radians, "degrees": math.degrees, "min": min, "max": max,
+}
+UT_CONSTS = {"pi": math.pi, "e": math.e, "tau": math.tau}
+
+
+def ut_eval(node):
+    if isinstance(node, ast.Expression):
+        return ut_eval(node.body)
+    if isinstance(node, ast.Constant) and isinstance(node.value, (int, float)) and not isinstance(node.value, bool):
+        return node.value
+    if isinstance(node, ast.Name) and node.id in UT_CONSTS:
+        return UT_CONSTS[node.id]
+    if isinstance(node, ast.UnaryOp) and type(node.op) in UT_UNOPS:
+        return UT_UNOPS[type(node.op)](ut_eval(node.operand))
+    if isinstance(node, ast.BinOp) and type(node.op) in UT_BINOPS:
+        left = ut_eval(node.left)
+        right = ut_eval(node.right)
+        if isinstance(node.op, ast.Pow):
+            if abs(right) > 10000 or (left not in (0, 1, -1) and abs(right) * math.log10(abs(left)) > 1000):
+                raise ValueError("Result is too large")
+        return UT_BINOPS[type(node.op)](left, right)
+    if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id in UT_FUNCS and not node.keywords:
+        args = [ut_eval(a) for a in node.args]
+        if node.func.id == "factorial" and (not args or args[0] > 500):
+            raise ValueError("Factorial is too large")
+        return UT_FUNCS[node.func.id](*args)
+    raise ValueError("Unsupported expression")
+
+
+async def c_math(message, rest):
+    if not rest:
+        return await ut_usage(message, "`.math <expression>` e.g. `.math sqrt(144) + 2^3`")
+    expr = ut_code(rest).replace("^", "**").replace("×", "*").replace("÷", "/").replace(",", "")
+    try:
+        result = ut_eval(ast.parse(expr, mode="eval"))
+    except ZeroDivisionError:
+        return await ut_fail(message, "Cannot divide by zero.")
+    except Exception as e:
+        return await ut_fail(message, f"Invalid expression: {ut_clip(str(e), 100)}")
+    if isinstance(result, float):
+        result = int(result) if result.is_integer() and abs(result) < 1e15 else round(result, 10)
+    await ut_send(message, "Math", f"**Expression:** `{ut_clip(expr, 200)}`\n**Result:** `{ut_clip(str(result), 1000)}`")
+
+
+UT_UNITS = {"s": 1, "m": 60, "h": 3600, "d": 86400, "w": 604800}
+
+
+def ut_parse_time(text: str):
+    t = text.strip().lower()
+    now = datetime.now(timezone.utc)
+    if not t or t == "now":
+        return now
+    if re.fullmatch(r"\d{10,13}", t):
+        v = int(t)
+        if len(t) == 13:
+            v //= 1000
+        return datetime.fromtimestamp(v, timezone.utc)
+    rel = re.fullmatch(r"(?:in\s+)?([+-]?)((?:\d+\s*[smhdw]\s*)+)(ago)?", t)
+    if rel:
+        sign = -1 if rel.group(1) == "-" or rel.group(3) else 1
+        total = sum(int(n) * UT_UNITS[u] for n, u in re.findall(r"(\d+)\s*([smhdw])", rel.group(2)))
+        return now + timedelta(seconds=sign * total)
+    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M", "%Y-%m-%d", "%m/%d/%Y %H:%M", "%m/%d/%Y"):
+        try:
+            return datetime.strptime(text.strip(), fmt).replace(tzinfo=timezone.utc)
+        except ValueError:
+            continue
+    return None
+
+
+async def c_timestamp(message, rest):
+    dt = ut_parse_time(rest)
+    if dt is None:
+        return await ut_usage(message, "`.timestamp [now | unix | 2026-12-25 18:30 | in 2h30m | 3d ago]` (UTC)")
+    ts = int(dt.timestamp())
+    names = {"t": "Short time", "T": "Long time", "d": "Short date", "D": "Long date", "f": "Short date/time", "F": "Long date/time", "R": "Relative"}
+    lines = [f"**Unix:** `{ts}`"]
+    for fmt, name in names.items():
+        lines.append(f"**{name}:** <t:{ts}:{fmt}>\n`<t:{ts}:{fmt}>`")
+    await ut_send(message, "Timestamp", "\n".join(lines))
+
+
+async def c_urban(message, rest):
+    if not rest:
+        return await ut_usage(message, "`.urban <word>`")
+    data = await ut_http("https://api.urbandictionary.com/v0/define", params={"term": rest})
+    if not data or not data.get("list"):
+        return await ut_fail(message, "No definition found.")
+    d = data["list"][0]
+    clean = lambda s: s.replace("[", "").replace("]", "").replace("\r", "")
+    lines = [
+        f"**Definition**\n{ut_clip(clean(d['definition']), 900)}",
+        f"**Example**\n{ut_clip(clean(d['example']), 500)}" if d.get("example") else "",
+        f"👍 {d.get('thumbs_up', 0)}  👎 {d.get('thumbs_down', 0)} • by {d.get('author', 'unknown')}",
+        f"[Open on Urban Dictionary]({d['permalink']})" if d.get("permalink") else "",
+    ]
+    await ut_send(message, d["word"], "\n\n".join(x for x in lines if x))
+
+
+async def c_stealsticker(message, rest):
+    if not message.author.guild_permissions.manage_emojis_and_stickers:
+        return await ut_fail(message, "You need Manage Emojis and Stickers to use this.")
+    src = message if message.stickers else None
+    if src is None and message.reference and isinstance(message.reference.resolved, discord.Message):
+        src = message.reference.resolved
+    if not src or not src.stickers:
+        return await ut_usage(message, "`.stealsticker` while replying to a message with a sticker")
+    item = src.stickers[0]
+    if item.format == discord.StickerFormatType.lottie:
+        return await ut_fail(message, "Lottie stickers can't be copied.")
+    try:
+        data = await item.read()
+    except Exception:
+        data = await ut_http(item.url, as_json=False)
+        if not data:
+            return await ut_fail(message, "Could not download that sticker.")
+        data = data.encode("latin-1", "ignore")
+    try:
+        sticker = await message.guild.create_sticker(
+            name=ut_clip(item.name, 30) if len(item.name) >= 2 else "sticker",
+            description=ut_clip(item.name, 90),
+            emoji="🙂",
+            file=discord.File(BytesIO(data), filename=f"{item.name}.png"),
+            reason=f"Stolen by {message.author}"
+        )
+    except discord.Forbidden:
+        return await ut_fail(message, "I don't have permission to manage stickers.")
+    except discord.HTTPException as e:
+        return await ut_fail(message, f"Could not add the sticker: `{ut_clip(str(e), 150)}`")
+    await ut_send(message, "Sticker Stolen", f"Added sticker **{sticker.name}**.", image=sticker.url)
+
+
+async def c_emojis(message, rest):
+    emojis = message.guild.emojis
+    if not emojis:
+        return await ut_fail(message, "This server has no custom emojis.")
+    out = []
+    size = 0
+    for e in emojis:
+        s = str(e)
+        if size + len(s) + 1 > 3200:
+            break
+        out.append(s)
+        size += len(s) + 1
+    rest_count = len(emojis) - len(out)
+    body = " ".join(out) + (f"\n\n…and {rest_count} more" if rest_count else "")
+    await ut_send(message, f"Emojis ({len(emojis)})", body)
+
+
+UT_ACTIVITIES = {
+    "watch": ("Watch Together", 880218394199220334),
+    "chess": ("Chess In The Park", 832012774040141894),
+    "checkers": ("Checkers In The Park", 832013003968348200),
+    "poker": ("Poker Night", 755827207812677713),
+    "sketch": ("Sketch Heads", 902271654783242291),
+    "letter": ("Letter League", 879863686565621790),
+    "snacks": ("Word Snacks", 879863976006127627),
+    "blazing": ("Blazing 8s", 832025144389533716),
+    "putt": ("Putt Party", 945737671220322374),
+    "landio": ("Land-io", 903769130790969345),
+    "fishing": ("Fishington", 814288819477020702),
+    "spellcast": ("SpellCast", 852509694341283871),
+}
+
+
+async def c_activity(message, rest):
+    key = rest.lower().split()[0] if rest else ""
+    if key not in UT_ACTIVITIES:
+        names = ", ".join(f"`{k}`" for k in UT_ACTIVITIES)
+        return await ut_usage(message, f"`.activity <name>` (join a voice channel first)\nActivities: {names}")
+    voice = message.author.voice.channel if message.author.voice else None
+    if voice is None:
+        return await ut_fail(message, "Join a voice channel first.")
+    name, app_id = UT_ACTIVITIES[key]
+    try:
+        invite = await voice.create_invite(
+            max_age=3600,
+            target_type=discord.InviteTarget.embedded_application,
+            target_application_id=app_id
+        )
+    except discord.Forbidden:
+        return await ut_fail(message, "I need the Create Invite permission in that voice channel.")
+    except discord.HTTPException as e:
+        return await ut_fail(message, f"Could not start the activity: `{ut_clip(str(e), 150)}`")
+    await ut_send(message, name, f"Started in {voice.mention}.\n[Click here to join]({invite.url})")
+
+
+def ut_alpha_style(text, upper, lower, digit=None, exceptions=None):
+    out = []
+    for ch in text:
+        if exceptions and ch in exceptions:
+            out.append(exceptions[ch])
+        elif "A" <= ch <= "Z":
+            out.append(chr(upper + ord(ch) - 65))
+        elif "a" <= ch <= "z":
+            out.append(chr(lower + ord(ch) - 97))
+        elif digit is not None and "0" <= ch <= "9":
+            out.append(chr(digit + ord(ch) - 48))
+        else:
+            out.append(ch)
+    return "".join(out)
+
+
+UT_SMALLCAPS = dict(zip("abcdefghijklmnopqrstuvwxyz", "ᴀʙᴄᴅᴇꜰɢʜɪᴊᴋʟᴍɴᴏᴘǫʀsᴛᴜᴠᴡxʏᴢ"))
+UT_DOUBLE_EX = {"C": "ℂ", "H": "ℍ", "N": "ℕ", "P": "ℙ", "Q": "ℚ", "R": "ℝ", "Z": "ℤ"}
+
+
+def ut_circled(text):
+    out = []
+    for ch in text:
+        if "A" <= ch <= "Z":
+            out.append(chr(0x24B6 + ord(ch) - 65))
+        elif "a" <= ch <= "z":
+            out.append(chr(0x24D0 + ord(ch) - 97))
+        elif "1" <= ch <= "9":
+            out.append(chr(0x2460 + ord(ch) - 49))
+        elif ch == "0":
+            out.append("⓪")
+        else:
+            out.append(ch)
+    return "".join(out)
+
+
+async def c_ascii(message, rest):
+    text = rest or ut_reply_text(message)
+    if not text:
+        return await ut_usage(message, "`.ascii <text>`")
+    text = text[:100]
+    styles = [
+        ("Bold", ut_alpha_style(text, 0x1D400, 0x1D41A, 0x1D7CE)),
+        ("Italic", ut_alpha_style(text, 0x1D434, 0x1D44E, None, {"h": "ℎ"})),
+        ("Bold Italic", ut_alpha_style(text, 0x1D468, 0x1D482, 0x1D7CE)),
+        ("Script", ut_alpha_style(text, 0x1D4D0, 0x1D4EA, 0x1D7CE)),
+        ("Fraktur", ut_alpha_style(text, 0x1D56C, 0x1D586, 0x1D7CE)),
+        ("Double Struck", ut_alpha_style(text, 0x1D538, 0x1D552, 0x1D7D8, UT_DOUBLE_EX)),
+        ("Monospace", ut_alpha_style(text, 0x1D670, 0x1D68A, 0x1D7F6)),
+        ("Sans Bold", ut_alpha_style(text, 0x1D5D4, 0x1D5EE, 0x1D7EC)),
+        ("Circled", ut_circled(text)),
+        ("Small Caps", "".join(UT_SMALLCAPS.get(c, c) for c in text.lower())),
+        ("Fullwidth", "".join(chr(ord(c) + 0xFEE0) if 33 <= ord(c) <= 126 else c for c in text)),
+    ]
+    await ut_send(message, "Fancy Text", "\n".join(f"**{n}:** {s}" for n, s in styles))
+
+
+UT_DIGITS = "0123456789abcdefghijklmnopqrstuvwxyz"
+
+
+def ut_to_base(n: int, base: int) -> str:
+    if n == 0:
+        return "0"
+    sign = "-" if n < 0 else ""
+    n = abs(n)
+    out = []
+    while n:
+        n, r = divmod(n, base)
+        out.append(UT_DIGITS[r])
+    return sign + "".join(reversed(out))
+
+
+async def c_base(message, rest):
+    parts = rest.split()
+    if len(parts) not in (2, 3) or not all(p.isdigit() for p in parts[1:]):
+        return await ut_usage(message, "`.base <number> <from base> [to base]` (bases 2-36)")
+    src = int(parts[1])
+    if not 2 <= src <= 36:
+        return await ut_fail(message, "Bases must be between 2 and 36.")
+    try:
+        n = int(parts[0], src)
+    except ValueError:
+        return await ut_fail(message, f"`{parts[0]}` is not a valid base {src} number.")
+    if len(parts) == 3:
+        dst = int(parts[2])
+        if not 2 <= dst <= 36:
+            return await ut_fail(message, "Bases must be between 2 and 36.")
+        return await ut_send(message, "Base Convert", f"**Input:** `{parts[0]}` (base {src})\n**Output:** `{ut_to_base(n, dst)}` (base {dst})")
+    lines = [f"**Input:** `{parts[0]}` (base {src})"]
+    for b, name in ((2, "Binary"), (8, "Octal"), (10, "Decimal"), (16, "Hex")):
+        lines.append(f"**{name}:** `{ut_to_base(n, b)}`")
+    await ut_send(message, "Base Convert", "\n".join(lines))
+
+
+def ut_codec(kind: str):
+    async def handler(message, rest):
+        parts = rest.split(None, 1)
+        if not parts:
+            return await ut_usage(message, f"`.{kind} <encode|decode> <text>`")
+        mode = parts[0].lower()
+        if mode in ("encode", "decode"):
+            text = parts[1] if len(parts) > 1 else ut_reply_text(message)
+        else:
+            mode, text = "encode", rest
+        if not text:
+            return await ut_usage(message, f"`.{kind} <encode|decode> <text>`")
+        try:
+            if kind == "base64":
+                out = base64.b64encode(text.encode()).decode() if mode == "encode" else base64.b64decode(text.strip() + "=" * (-len(text.strip()) % 4)).decode("utf-8", "replace")
+            elif kind == "base32":
+                out = base64.b32encode(text.encode()).decode() if mode == "encode" else base64.b32decode(text.strip().upper() + "=" * (-len(text.strip()) % 8)).decode("utf-8", "replace")
+            elif kind == "binary":
+                if mode == "encode":
+                    out = " ".join(f"{b:08b}" for b in text.encode())
+                else:
+                    bits = re.sub(r"[^01]", "", text)
+                    if not bits or len(bits) % 8:
+                        raise ValueError("bad length")
+                    out = bytes(int(bits[i:i + 8], 2) for i in range(0, len(bits), 8)).decode("utf-8", "replace")
+            else:
+                return
+        except Exception:
+            return await ut_fail(message, f"That isn't valid {kind} to decode.")
+        await ut_send(message, f"{kind.title()} {mode.title()}", ut_block(ut_clip(out, 1800)))
+    return handler
+
+
+async def c_char(message, rest):
+    if not rest:
+        return await ut_usage(message, "`.char <characters>` or `.char U+1F600`")
+    m = re.fullmatch(r"(?:u\+|\\u|0x)([0-9a-fA-F]{1,6})", rest.strip(), re.I)
+    chars = [chr(int(m.group(1), 16))] if m else list(rest.strip())[:10]
+    lines = []
+    for ch in chars:
+        cp = ord(ch)
+        name = unicodedata.name(ch, "(unnamed)")
+        cat = unicodedata.category(ch)
+        utf8 = " ".join(f"{b:02x}" for b in ch.encode("utf-8", "replace"))
+        shown = ch if ch.isprintable() and not ch.isspace() else "␣"
+        lines.append(f"`{shown}` **U+{cp:04X}** — {name} ({cat})\nUTF-8: `{utf8}` • Decimal: `{cp}`")
+    await ut_send(message, "Character Info", "\n\n".join(lines))
+
+
+async def c_cidr(message, rest):
+    if not rest:
+        return await ut_usage(message, "`.cidr <ip/prefix>` e.g. `.cidr 192.168.1.0/24`")
+    try:
+        net = ipaddress.ip_network(rest.split()[0], strict=False)
+    except ValueError:
+        return await ut_fail(message, "Invalid CIDR block.")
+    lines = [
+        f"**Network:** `{net.network_address}/{net.prefixlen}`",
+        f"**Version:** IPv{net.version}",
+        f"**Netmask:** `{net.netmask}`",
+        f"**Wildcard:** `{net.hostmask}`",
+    ]
+    if net.version == 4:
+        lines.append(f"**Broadcast:** `{net.broadcast_address}`")
+        usable = max(net.num_addresses - 2, 0) if net.prefixlen < 31 else net.num_addresses
+        first = net.network_address + 1 if net.prefixlen < 31 else net.network_address
+        last = net.broadcast_address - 1 if net.prefixlen < 31 else net.broadcast_address
+        lines.append(f"**Usable hosts:** {usable:,}")
+        lines.append(f"**Host range:** `{first}` – `{last}`")
+    else:
+        lines.append(f"**Addresses:** {net.num_addresses:,}")
+        lines.append(f"**Range:** `{net.network_address}` – `{net.broadcast_address}`")
+    lines.append(f"**Total addresses:** {net.num_addresses:,}")
+    lines.append(f"**Private:** {'Yes' if net.is_private else 'No'}")
+    await ut_send(message, "CIDR", "\n".join(lines))
+
+
+def ut_counting() -> dict:
+    c = config.setdefault("counting", {})
+    c.setdefault("channel_id", None)
+    c.setdefault("count", 0)
+    c.setdefault("last_user", None)
+    c.setdefault("record", 0)
+    return c
+
+
+async def counting_check(message: discord.Message) -> bool:
+    c = ut_counting()
+    if not c["channel_id"] or message.channel.id != c["channel_id"]:
+        return False
+    text = message.content.strip()
+    if not re.fullmatch(r"\d{1,15}", text):
+        return False
+    n = int(text)
+    expected = c["count"] + 1
+    if c["last_user"] == message.author.id and c["count"] > 0:
+        reason = "You can't count twice in a row."
+    elif n != expected:
+        reason = f"Wrong number. The next number was **{expected}**."
+    else:
+        c["count"] = n
+        c["last_user"] = message.author.id
+        if n > c["record"]:
+            c["record"] = n
+        save_config(config)
+        try:
+            await message.add_reaction("✅")
+        except Exception:
+            pass
+        return True
+    try:
+        await message.add_reaction("❌")
+    except Exception:
+        pass
+    ruined = c["count"]
+    c["count"] = 0
+    c["last_user"] = None
+    save_config(config)
+    await message.channel.send(
+        f"{message.author.mention} ruined it at **{ruined}**! {reason}\nThe count is reset. Next number is **1**.",
+        allowed_mentions=discord.AllowedMentions(users=True, roles=False, everyone=False)
+    )
+    return True
+
+
+async def c_counting(message, rest):
+    parts = rest.split()
+    sub = parts[0].lower() if parts else "status"
+    c = ut_counting()
+    usage = "`.counting setup #channel` `.counting off` `.counting reset` `.counting status`"
+    if sub in ("setup", "off", "reset") and not message.author.guild_permissions.manage_channels:
+        return await ut_fail(message, "You need Manage Channels to use this.")
+    if sub == "setup":
+        if not message.channel_mentions:
+            return await ut_usage(message, usage)
+        c["channel_id"] = message.channel_mentions[0].id
+        c["count"] = 0
+        c["last_user"] = None
+        save_config(config)
+        await ut_send(message, "Counting Game", f"Counting is set up in {message.channel_mentions[0].mention}. Start with **1**!\n-# Same person can't count twice in a row. A wrong number resets the count.")
+    elif sub == "off":
+        c["channel_id"] = None
+        save_config(config)
+        await ut_send(message, "Counting Game", "Counting game turned off.")
+    elif sub == "reset":
+        c["count"] = 0
+        c["last_user"] = None
+        save_config(config)
+        await ut_send(message, "Counting Game", "The count was reset to 0.")
+    elif sub == "status":
+        ch = f"<#{c['channel_id']}>" if c["channel_id"] else "Not set"
+        await ut_send(message, "Counting Game", f"**Channel:** {ch}\n**Current count:** {c['count']}\n**Record:** {c['record']}\n\n{usage}")
+    else:
+        await ut_usage(message, usage)
+
+
+async def c_diff(message, rest):
+    text = rest
+    blocks = re.findall(r"```(?:[a-zA-Z0-9_+-]*\n)?(.*?)```", text, re.S)
+    if len(blocks) >= 2:
+        a, b = blocks[0], blocks[1]
+    elif "\n---\n" in text:
+        a, _, b = text.partition("\n---\n")
+    elif " | " in text:
+        a, _, b = text.partition(" | ")
+    else:
+        return await ut_usage(message, "`.diff <text one> | <text two>` or two code blocks")
+    if "\n" not in a.strip() and "\n" not in b.strip():
+        la, lb = a.split(), b.split()
+    else:
+        la, lb = a.strip().splitlines(), b.strip().splitlines()
+    diff = list(difflib.unified_diff(la, lb, "before", "after", lineterm="", n=2))
+    if not diff:
+        return await ut_send(message, "Diff", "The two texts are identical.")
+    ratio = difflib.SequenceMatcher(None, a, b).ratio()
+    await ut_send(message, "Diff", f"**Similarity:** {ratio * 100:.1f}%\n" + ut_block(ut_clip("\n".join(diff), 2800), "diff"))
+
+
+UT_DNS_TYPES = {"A": 1, "NS": 2, "CNAME": 5, "SOA": 6, "PTR": 12, "MX": 15, "TXT": 16, "AAAA": 28, "SRV": 33, "CAA": 257}
+
+
+async def c_dns(message, rest):
+    parts = rest.split()
+    if not parts:
+        return await ut_usage(message, "`.dns <domain> [type]` types: " + ", ".join(UT_DNS_TYPES))
+    domain = ut_domain(parts[0])
+    if not domain:
+        return await ut_fail(message, "Invalid domain.")
+    types = [parts[1].upper()] if len(parts) > 1 else ["A", "AAAA", "CNAME", "MX", "NS", "TXT"]
+    if any(t not in UT_DNS_TYPES for t in types):
+        return await ut_fail(message, "Unsupported record type. Use: " + ", ".join(UT_DNS_TYPES))
+    results = await asyncio.gather(*[ut_http("https://dns.google/resolve", params={"name": domain, "type": t}) for t in types])
+    lines = []
+    for t, d in zip(types, results):
+        for a in (d or {}).get("Answer", []):
+            if a.get("type") == UT_DNS_TYPES[t]:
+                lines.append(f"{t:<6} {ut_clip(str(a.get('data', '')), 120)}  (TTL {a.get('TTL')})")
+    if not lines:
+        return await ut_fail(message, f"No records found for `{domain}`.")
+    await ut_send(message, f"DNS — {domain}", ut_block("\n".join(lines)))
+
+
+async def c_entropy(message, rest):
+    text = ut_code(rest)
+    if not text:
+        return await ut_usage(message, "`.entropy <password or text>`")
+    try:
+        await message.delete()
+    except Exception:
+        pass
+    pool = 0
+    if re.search(r"[a-z]", text):
+        pool += 26
+    if re.search(r"[A-Z]", text):
+        pool += 26
+    if re.search(r"\d", text):
+        pool += 10
+    if re.search(r"[^\w\s]|_", text):
+        pool += 33
+    if re.search(r"\s", text):
+        pool += 1
+    if re.search(r"[^\x00-\x7f]", text):
+        pool += 100
+    pool = max(pool, 2)
+    bits = len(text) * math.log2(pool)
+    counts = Counter(text)
+    shannon = -sum(c / len(text) * math.log2(c / len(text)) for c in counts.values())
+    if bits < 28:
+        label = "Very weak"
+    elif bits < 36:
+        label = "Weak"
+    elif bits < 60:
+        label = "Reasonable"
+    elif bits < 128:
+        label = "Strong"
+    else:
+        label = "Very strong"
+    seconds = (2 ** min(bits, 400)) / 2 / 1e10
+    crack = "centuries+" if seconds > 31536000 * 1000 else ut_human(seconds) if seconds >= 1 else "instantly"
+    lines = [
+        f"**Length:** {len(text)}",
+        f"**Character pool:** {pool}",
+        f"**Entropy:** {bits:.1f} bits",
+        f"**Shannon entropy:** {shannon:.2f} bits/char",
+        f"**Strength:** {label}",
+        f"**Brute force (10B guesses/sec):** {crack}",
+        "-# Your message was deleted for safety. Never share real passwords publicly.",
+    ]
+    await ut_send(message, "Entropy", "\n".join(lines))
+
+
+async def c_expand(message, rest):
+    url = rest.split()[0] if rest else ""
+    if not url:
+        return await ut_usage(message, "`.expand <short link>`")
+    if not re.match(r"^https?://", url, re.I):
+        url = "https://" + url
+    chain = []
+    note = ""
+    try:
+        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=10), headers=UT_UA) as session:
+            current = url
+            for _ in range(10):
+                host = urllib.parse.urlparse(current).hostname
+                if not host or await ut_public(host) is None:
+                    note = "Stopped: the next address could not be resolved or isn't public."
+                    break
+                async with session.get(current, allow_redirects=False) as res:
+                    status = res.status
+                    loc = res.headers.get("Location")
+                chain.append((current, status))
+                if status in (301, 302, 303, 307, 308) and loc:
+                    current = urllib.parse.urljoin(current, loc)
+                else:
+                    break
+            else:
+                note = "Stopped after 10 redirects."
+    except Exception as e:
+        note = f"Request failed: {type(e).__name__}"
+    if not chain:
+        return await ut_fail(message, note or "Could not reach that link.")
+    lines = [f"{i + 1}. `{ut_clip(u, 150)}` ({s})" for i, (u, s) in enumerate(chain)]
+    final = chain[-1][0]
+    if chain[-1][1] in (301, 302, 303, 307, 308) and note:
+        final = current
+    body = f"**Final destination:**\n{ut_clip(final, 500)}\n\n**Redirect chain:**\n" + "\n".join(lines)
+    if note:
+        body += f"\n\n-# {note}"
+    await ut_send(message, "Expand URL", body)
+
+
+UT_HASHES = ["md5", "sha1", "sha224", "sha256", "sha384", "sha512", "sha3_256", "blake2b"]
+
+
+async def c_hash(message, rest):
+    parts = rest.split(None, 1)
+    if not parts:
+        return await ut_usage(message, "`.hash <text>` or `.hash <algorithm> <text>`\nAlgorithms: " + ", ".join(UT_HASHES))
+    if parts[0].lower() in UT_HASHES and len(parts) > 1:
+        algos, text = [parts[0].lower()], parts[1]
+    else:
+        algos, text = UT_HASHES, rest
+    lines = [f"{a:<9} {hashlib.new(a, text.encode()).hexdigest()}" for a in algos]
+    await ut_send(message, "Hash", f"**Input:** {ut_clip(text, 100)}\n" + ut_block("\n".join(lines)))
+
+
+async def c_httpstatus(message, rest):
+    if not rest.strip().isdigit():
+        return await ut_usage(message, "`.httpstatus <code>` e.g. `.httpstatus 404`")
+    code = int(rest.strip())
+    try:
+        st = http.HTTPStatus(code)
+    except ValueError:
+        return await ut_fail(message, "Unknown HTTP status code.")
+    cat = {1: "Informational", 2: "Success", 3: "Redirection", 4: "Client Error", 5: "Server Error"}[code // 100]
+    await ut_send(message, f"HTTP {code}", f"**{st.phrase}**\n**Category:** {cat}\n\n{st.description}")
+
+
+UT_IBAN = {
+    "AD": 24, "AE": 23, "AL": 28, "AT": 20, "AZ": 28, "BA": 20, "BE": 16, "BG": 22, "BH": 22, "BR": 29,
+    "BY": 28, "CH": 21, "CR": 22, "CY": 28, "CZ": 24, "DE": 22, "DK": 18, "DO": 28, "EE": 20, "EG": 29,
+    "ES": 24, "FI": 18, "FO": 18, "FR": 27, "GB": 22, "GE": 22, "GI": 23, "GL": 18, "GR": 27, "GT": 28,
+    "HR": 21, "HU": 28, "IE": 22, "IL": 23, "IQ": 23, "IS": 26, "IT": 27, "JO": 30, "KW": 30, "KZ": 20,
+    "LB": 28, "LI": 21, "LT": 20, "LU": 20, "LV": 21, "MC": 27, "MD": 24, "ME": 22, "MK": 19, "MR": 27,
+    "MT": 31, "MU": 30, "NL": 18, "NO": 15, "PK": 24, "PL": 28, "PS": 29, "PT": 25, "QA": 29, "RO": 24,
+    "RS": 22, "SA": 24, "SC": 31, "SE": 24, "SI": 19, "SK": 24, "SM": 27, "TL": 23, "TN": 24, "TR": 26,
+    "UA": 29, "VA": 22, "VG": 24, "XK": 20,
+}
+
+
+async def c_iban(message, rest):
+    iban = re.sub(r"\s+", "", rest).upper()
+    if not iban:
+        return await ut_usage(message, "`.iban <iban>`")
+    problems = []
+    if not re.fullmatch(r"[A-Z]{2}\d{2}[A-Z0-9]{4,30}", iban):
+        problems.append("Wrong format (expected 2 letters, 2 digits, then up to 30 letters/digits).")
+    else:
+        country = iban[:2]
+        expected = UT_IBAN.get(country)
+        if expected is None:
+            problems.append(f"Unknown or unsupported country code `{country}`.")
+        elif len(iban) != expected:
+            problems.append(f"Length is {len(iban)} but {country} IBANs have {expected} characters.")
+        rearranged = iban[4:] + iban[:4]
+        numeric = "".join(str(int(c, 36)) for c in rearranged)
+        if int(numeric) % 97 != 1:
+            problems.append("The checksum is invalid.")
+    grouped = " ".join(iban[i:i + 4] for i in range(0, len(iban), 4))
+    if problems:
+        return await ut_send(message, "IBAN — Invalid ❌", f"`{ut_clip(grouped, 60)}`\n\n" + "\n".join(f"• {p}" for p in problems))
+    lines = [
+        f"`{grouped}`",
+        f"**Country:** {iban[:2]}",
+        f"**Check digits:** {iban[2:4]}",
+        f"**BBAN:** `{iban[4:]}`",
+        f"**Length:** {len(iban)}",
+    ]
+    await ut_send(message, "IBAN — Valid ✅", "\n".join(lines))
+
+
+async def c_ip(message, rest):
+    target = rest.split()[0] if rest else ""
+    if not target:
+        return await ut_usage(message, "`.ip <ip or domain>`")
+    try:
+        ip = str(ipaddress.ip_address(target))
+        if not ipaddress.ip_address(ip).is_global:
+            return await ut_fail(message, "That is a private or reserved address.")
+    except ValueError:
+        domain = ut_domain(target)
+        if not domain:
+            return await ut_fail(message, "Invalid IP address or domain.")
+        ip = await ut_public(domain)
+        if ip is None:
+            return await ut_fail(message, "Could not resolve a public IP for that domain.")
+    fields = "status,message,country,countryCode,regionName,city,zip,lat,lon,timezone,isp,org,as,reverse,mobile,proxy,hosting,query"
+    data = await ut_http(f"http://ip-api.com/json/{ip}", params={"fields": fields})
+    if not data or data.get("status") != "success":
+        return await ut_fail(message, "Lookup failed. Try again later.")
+    lines = [
+        f"**IP:** `{data['query']}`",
+        f"**Country:** {data.get('country')} ({data.get('countryCode')})",
+        f"**Region:** {data.get('regionName')}",
+        f"**City:** {data.get('city')} {data.get('zip') or ''}".strip(),
+        f"**Coordinates:** {data.get('lat')}, {data.get('lon')}",
+        f"**Timezone:** {data.get('timezone')}",
+        f"**ISP:** {data.get('isp')}",
+        f"**Organization:** {data.get('org') or 'N/A'}",
+        f"**AS:** {data.get('as') or 'N/A'}",
+        f"**Reverse DNS:** {data.get('reverse') or 'N/A'}",
+        f"**Mobile:** {'Yes' if data.get('mobile') else 'No'} • **Proxy:** {'Yes' if data.get('proxy') else 'No'} • **Hosting:** {'Yes' if data.get('hosting') else 'No'}",
+    ]
+    await ut_send(message, "IP Lookup", "\n".join(lines))
+
+
+async def c_json(message, rest):
+    text = ut_code(rest or ut_reply_text(message))
+    if not text:
+        return await ut_usage(message, "`.json <json text>`")
+    try:
+        obj = json.loads(text)
+    except json.JSONDecodeError as e:
+        lines = text.splitlines() or [text]
+        context = lines[e.lineno - 1] if 0 < e.lineno <= len(lines) else ""
+        body = f"**Error:** {e.msg}\n**Line {e.lineno}, column {e.colno}**\n" + ut_block(ut_clip(context, 200))
+        return await ut_send(message, "JSON — Invalid ❌", body)
+    pretty = json.dumps(obj, indent=2, ensure_ascii=False)
+    kind = type(obj).__name__
+    size = f"{len(obj)} item(s)" if isinstance(obj, (list, dict)) else "value"
+    await ut_send(message, "JSON — Valid ✅", f"**Type:** {kind} ({size})\n" + ut_block(ut_clip(pretty, 2800), "json"))
+
+
+def ut_b64url(part: str) -> bytes:
+    return base64.urlsafe_b64decode(part + "=" * (-len(part) % 4))
+
+
+async def c_jwt(message, rest):
+    token = ut_code(rest).strip()
+    parts = token.split(".")
+    if len(parts) != 3:
+        return await ut_usage(message, "`.jwt <token>`")
+    try:
+        header = json.loads(ut_b64url(parts[0]))
+        payload = json.loads(ut_b64url(parts[1]))
+    except Exception:
+        return await ut_fail(message, "That isn't a valid JWT.")
+    lines = [
+        "**Header**",
+        ut_block(json.dumps(header, indent=2), "json"),
+        "**Payload**",
+        ut_block(ut_clip(json.dumps(payload, indent=2, ensure_ascii=False), 1500), "json"),
+    ]
+    times = []
+    for key, label in (("iat", "Issued"), ("nbf", "Not before"), ("exp", "Expires")):
+        if isinstance(payload.get(key), (int, float)):
+            times.append(f"**{label}:** <t:{int(payload[key])}:F> (<t:{int(payload[key])}:R>)")
+    if times:
+        lines.append("\n".join(times))
+    if str(header.get("alg", "")).lower() == "none":
+        lines.append("⚠️ This token uses `alg: none` and is unsigned.")
+    lines.append("-# The signature is NOT verified.")
+    await ut_send(message, "JWT Decoded", "\n".join(lines))
+
+
+UT_LOREM = (
+    "lorem ipsum dolor sit amet consectetur adipiscing elit sed do eiusmod tempor incididunt ut labore et dolore magna aliqua "
+    "enim ad minim veniam quis nostrud exercitation ullamco laboris nisi aliquip ex ea commodo consequat duis aute irure in "
+    "reprehenderit voluptate velit esse cillum fugiat nulla pariatur excepteur sint occaecat cupidatat non proident sunt culpa "
+    "qui officia deserunt mollit anim id est laborum"
+).split()
+
+
+def ut_sentence() -> str:
+    words = [random.choice(UT_LOREM) for _ in range(random.randint(6, 14))]
+    return words[0].capitalize() + " " + " ".join(words[1:]) + "."
+
+
+async def c_lorem(message, rest):
+    count, unit = 1, "paragraphs"
+    for p in rest.lower().split():
+        if p.isdigit():
+            count = max(1, min(int(p), 20))
+        elif p.startswith("word"):
+            unit = "words"
+        elif p.startswith("sent"):
+            unit = "sentences"
+        elif p.startswith("para"):
+            unit = "paragraphs"
+    if unit == "words":
+        out = " ".join(random.choice(UT_LOREM) for _ in range(min(count, 300)))
+    elif unit == "sentences":
+        out = " ".join(ut_sentence() for _ in range(count))
+    else:
+        out = "\n\n".join(" ".join(ut_sentence() for _ in range(random.randint(3, 5))) for _ in range(min(count, 4)))
+    await ut_send(message, "Lorem Ipsum", ut_clip(out, 3000))
+
+
+UT_MORSE = {
+    "a": ".-", "b": "-...", "c": "-.-.", "d": "-..", "e": ".", "f": "..-.", "g": "--.", "h": "....", "i": "..",
+    "j": ".---", "k": "-.-", "l": ".-..", "m": "--", "n": "-.", "o": "---", "p": ".--.", "q": "--.-", "r": ".-.",
+    "s": "...", "t": "-", "u": "..-", "v": "...-", "w": ".--", "x": "-..-", "y": "-.--", "z": "--..",
+    "0": "-----", "1": ".----", "2": "..---", "3": "...--", "4": "....-", "5": ".....", "6": "-....", "7": "--...",
+    "8": "---..", "9": "----.", ".": ".-.-.-", ",": "--..--", "?": "..--..", "!": "-.-.--", "'": ".----.",
+    "/": "-..-.", "(": "-.--.", ")": "-.--.-", "&": ".-...", ":": "---...", ";": "-.-.-.", "=": "-...-",
+    "+": ".-.-.", "-": "-....-", "_": "..--.-", '"': ".-..-.", "@": ".--.-.",
+}
+UT_MORSE_REV = {v: k for k, v in UT_MORSE.items()}
+
+
+async def c_morse(message, rest):
+    parts = rest.split(None, 1)
+    if not parts:
+        return await ut_usage(message, "`.morse <encode|decode> <text>`")
+    mode = parts[0].lower()
+    if mode in ("encode", "decode"):
+        text = parts[1] if len(parts) > 1 else ut_reply_text(message)
+    else:
+        text = rest
+        mode = "decode" if re.fullmatch(r"[.\-/\s_•−]+", rest) else "encode"
+    if not text:
+        return await ut_usage(message, "`.morse <encode|decode> <text>`")
+    if mode == "encode":
+        out = " / ".join(" ".join(UT_MORSE.get(c, "?") for c in word) for word in text.lower().split())
+    else:
+        norm = text.replace("•", ".").replace("−", "-").replace("_", "-")
+        out = " ".join("".join(UT_MORSE_REV.get(code, "?") for code in word.split()) for word in re.split(r"\s*/\s*|\s{3,}", norm.strip()))
+    await ut_send(message, f"Morse {mode.title()}", ut_block(ut_clip(out, 1800)))
+
+
+async def c_password(message, rest):
+    length, symbols, digits = 16, True, True
+    for a in rest.lower().split():
+        if a.isdigit():
+            length = max(8, min(int(a), 64))
+        elif a in ("nosymbols", "nosym"):
+            symbols = False
+        elif a in ("nonumbers", "nonum"):
+            digits = False
+    pools = [string.ascii_lowercase, string.ascii_uppercase]
+    if digits:
+        pools.append(string.digits)
+    if symbols:
+        pools.append("!@#$%^&*()-_=+[]{};:,.?")
+    alphabet = "".join(pools)
+    while True:
+        pw = "".join(secrets.choice(alphabet) for _ in range(length))
+        if all(any(c in pool for c in pw) for pool in pools):
+            break
+    try:
+        await message.author.send(view=ut_view("Your Password", f"```{pw}```\n-# Length: {length}. Generated with a cryptographically secure generator."))
+    except discord.Forbidden:
+        return await ut_fail(message, "I couldn't DM you. Enable DMs from server members and try again.")
+    await ut_send(message, "Password", "I sent your new password to your DMs. 🔐")
+
+
+UT_REGEX_CODE = (
+    "import re,sys,json\n"
+    "d=json.loads(sys.stdin.read())\n"
+    "try:\n"
+    " r=re.compile(d['p'])\n"
+    " out=[]\n"
+    " for m in r.finditer(d['t']):\n"
+    "  out.append({'m':m.group(0),'s':m.start(),'e':m.end(),'g':list(m.groups()),'n':m.groupdict()})\n"
+    "  if len(out)>=25: break\n"
+    " print(json.dumps({'ok':out}))\n"
+    "except re.error as e:\n"
+    " print(json.dumps({'err':str(e)}))\n"
+)
+
+
+async def c_regex(message, rest):
+    if "\n" in rest:
+        pattern, _, text = rest.partition("\n")
+    elif " | " in rest:
+        pattern, _, text = rest.partition(" | ")
+    else:
+        return await ut_usage(message, "`.regex <pattern> | <text>`")
+    pattern = ut_code(pattern).strip()
+    text = text.strip()
+    if not pattern or not text:
+        return await ut_usage(message, "`.regex <pattern> | <text>`")
+    if len(pattern) > 300 or len(text) > 2000:
+        return await ut_fail(message, "Pattern (max 300) or text (max 2000) is too long.")
+    proc = await asyncio.create_subprocess_exec(
+        sys.executable, "-c", UT_REGEX_CODE,
+        stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL
+    )
+    try:
+        out, _ = await asyncio.wait_for(proc.communicate(json.dumps({"p": pattern, "t": text}).encode()), 3)
+    except asyncio.TimeoutError:
+        proc.kill()
+        return await ut_fail(message, "The pattern took too long to run (possible catastrophic backtracking).")
+    try:
+        res = json.loads(out.decode())
+    except Exception:
+        return await ut_fail(message, "Could not run that pattern.")
+    if "err" in res:
+        return await ut_fail(message, f"Invalid pattern: `{ut_clip(res['err'], 150)}`")
+    matches = res["ok"]
+    if not matches:
+        return await ut_send(message, "Regex — No Match", f"**Pattern:** `{ut_clip(pattern, 200)}`")
+    lines = [f"**Pattern:** `{ut_clip(pattern, 200)}`", f"**Matches:** {len(matches)}{'+' if len(matches) >= 25 else ''}", ""]
+    for i, m in enumerate(matches[:12], 1):
+        line = f"{i}. `{ut_clip(m['m'], 80)}` ({m['s']}–{m['e']})"
+        if m["g"]:
+            line += " groups: " + ", ".join(f"`{ut_clip(str(g), 40)}`" for g in m["g"])
+        lines.append(line)
+    await ut_send(message, "Regex — Match ✅", "\n".join(lines))
+
+
+async def c_rot13(message, rest):
+    text = rest or ut_reply_text(message)
+    if not text:
+        return await ut_usage(message, "`.rot13 <text>`")
+    await ut_send(message, "ROT13", ut_block(ut_clip(codecs.encode(text, "rot_13"), 1800)))
+
+
+async def c_slugify(message, rest):
+    text = rest or ut_reply_text(message)
+    if not text:
+        return await ut_usage(message, "`.slugify <text>`")
+    norm = unicodedata.normalize("NFKD", text).encode("ascii", "ignore").decode()
+    slug = re.sub(r"-{2,}", "-", re.sub(r"[^a-z0-9]+", "-", norm.lower())).strip("-")
+    await ut_send(message, "Slugify", f"`{slug or '(empty)'}`")
+
+
+def ut_ssl_sync(host: str, ip: str):
+    ctx = ssl.create_default_context()
+    with socket.create_connection((ip, 443), timeout=6) as sock:
+        with ctx.wrap_socket(sock, server_hostname=host) as s:
+            return s.getpeercert(), s.version(), s.cipher()[0]
+
+
+async def c_sslcheck(message, rest):
+    domain = ut_domain(rest.split()[0]) if rest else None
+    if not domain:
+        return await ut_usage(message, "`.sslcheck <domain>`")
+    ip = await ut_public(domain)
+    if ip is None:
+        return await ut_fail(message, "Could not resolve a public address for that domain.")
+    try:
+        cert, version, cipher = await asyncio.wait_for(asyncio.get_running_loop().run_in_executor(None, ut_ssl_sync, domain, ip), 10)
+    except ssl.SSLCertVerificationError as e:
+        return await ut_send(message, f"SSL — {domain}", f"❌ **Certificate verification failed**\n{ut_clip(str(e.verify_message), 200)}")
+    except Exception as e:
+        return await ut_fail(message, f"Could not complete the TLS handshake: `{type(e).__name__}`")
+    subject = dict(x[0] for x in cert.get("subject", ()))
+    issuer = dict(x[0] for x in cert.get("issuer", ()))
+    end = ssl.cert_time_to_seconds(cert["notAfter"])
+    start = ssl.cert_time_to_seconds(cert["notBefore"])
+    days = (end - time.time()) / 86400
+    sans = [v for k, v in cert.get("subjectAltName", ()) if k == "DNS"]
+    status = "✅ Valid" if days > 0 else "❌ Expired"
+    lines = [
+        f"**Status:** {status} ({int(days)} days left)" if days > 0 else f"**Status:** {status}",
+        f"**Subject:** {subject.get('commonName', 'N/A')}",
+        f"**Issuer:** {issuer.get('organizationName', issuer.get('commonName', 'N/A'))}",
+        f"**Valid from:** <t:{int(start)}:F>",
+        f"**Valid until:** <t:{int(end)}:F> (<t:{int(end)}:R>)",
+        f"**Protocol:** {version} • **Cipher:** {cipher}",
+        f"**Alt names ({len(sans)}):** {ut_clip(', '.join(sans[:10]), 400)}",
+    ]
+    await ut_send(message, f"SSL — {domain}", "\n".join(lines))
+
+
+def ut_todos(uid: int) -> list:
+    return config.setdefault("todos", {}).setdefault(str(uid), [])
+
+
+def ut_todo_view(items: list) -> str:
+    if not items:
+        return "Your todo list is empty. Add one with `.todo add <task>`."
+    return "\n".join(f"{i}. {'~~' + t['t'] + '~~ ✅' if t['d'] else '⬜ ' + t['t']}" for i, t in enumerate(items, 1))
+
+
+async def c_todo(message, rest):
+    parts = rest.split(None, 1)
+    sub = parts[0].lower() if parts else "list"
+    arg = parts[1].strip() if len(parts) > 1 else ""
+    items = ut_todos(message.author.id)
+    usage = "`.todo add <task>` `.todo list` `.todo done <n>` `.todo undo <n>` `.todo remove <n>` `.todo clear`"
+    if sub == "add":
+        if not arg:
+            return await ut_usage(message, usage)
+        if len(items) >= 25:
+            return await ut_fail(message, "Your list is full (max 25 tasks).")
+        items.append({"t": ut_clip(arg, 200), "d": False})
+        save_config(config)
+    elif sub in ("done", "undo", "remove", "delete"):
+        if not arg.isdigit() or not 1 <= int(arg) <= len(items):
+            return await ut_fail(message, "Give a valid task number from your list.")
+        i = int(arg) - 1
+        if sub == "done":
+            items[i]["d"] = True
+        elif sub == "undo":
+            items[i]["d"] = False
+        else:
+            items.pop(i)
+        save_config(config)
+    elif sub == "clear":
+        items.clear()
+        save_config(config)
+    elif sub != "list":
+        if rest:
+            if len(items) >= 25:
+                return await ut_fail(message, "Your list is full (max 25 tasks).")
+            items.append({"t": ut_clip(rest, 200), "d": False})
+            save_config(config)
+        else:
+            return await ut_usage(message, usage)
+    await ut_send(message, f"{message.author.display_name}'s Todo", ut_todo_view(items))
+
+
+async def c_urlencode(message, rest):
+    parts = rest.split(None, 1)
+    if not parts:
+        return await ut_usage(message, "`.urlencode <encode|decode> <text>`")
+    mode = parts[0].lower()
+    if mode in ("encode", "decode"):
+        text = parts[1] if len(parts) > 1 else ut_reply_text(message)
+    else:
+        mode, text = "encode", rest
+    if not text:
+        return await ut_usage(message, "`.urlencode <encode|decode> <text>`")
+    out = urllib.parse.quote(text, safe="") if mode == "encode" else urllib.parse.unquote(text)
+    await ut_send(message, f"URL {mode.title()}", ut_block(ut_clip(out, 1800)))
+
+
+async def c_useragent(message, rest):
+    ua = ut_code(rest)
+    if not ua:
+        return await ut_usage(message, "`.useragent <user-agent string>`")
+    browser = "Unknown"
+    for name, pat in (("Edge", r"Edg(?:e|A|iOS)?/([\d.]+)"), ("Opera", r"OPR/([\d.]+)"), ("Samsung Internet", r"SamsungBrowser/([\d.]+)"),
+                      ("Firefox", r"(?:Firefox|FxiOS)/([\d.]+)"), ("Chrome", r"(?:Chrome|CriOS)/([\d.]+)"),
+                      ("Safari", r"Version/([\d.]+).*Safari"), ("Internet Explorer", r"(?:MSIE |rv:)([\d.]+).*(?:Trident|MSIE)|Trident.*rv:([\d.]+)")):
+        m = re.search(pat, ua)
+        if m:
+            browser = f"{name} {next((g for g in m.groups() if g), '')}".strip()
+            break
+    os_name = "Unknown"
+    for name, pat in (("Windows", r"Windows NT ([\d.]+)"), ("Android", r"Android ([\d.]+)"), ("iOS", r"(?:iPhone|CPU) OS ([\d_]+)"),
+                      ("macOS", r"Mac OS X ([\d_.]+)"), ("Chrome OS", r"CrOS \S+ ([\d.]+)"), ("Linux", r"(Linux)")):
+        m = re.search(pat, ua)
+        if m:
+            ver = m.group(1).replace("_", ".")
+            os_name = name if name == "Linux" else f"{name} {ver}"
+            break
+    if re.search(r"bot|crawl|spider|slurp", ua, re.I):
+        device = "Bot / Crawler"
+    elif re.search(r"iPad|Tablet", ua):
+        device = "Tablet"
+    elif re.search(r"Mobi|iPhone|Android.*Mobile", ua):
+        device = "Mobile"
+    else:
+        device = "Desktop"
+    engine = "Unknown"
+    for name, pat in (("Blink/WebKit", r"AppleWebKit/([\d.]+)"), ("Gecko", r"Gecko/([\d.]+)"), ("Trident", r"Trident/([\d.]+)")):
+        m = re.search(pat, ua)
+        if m:
+            engine = f"{name} {m.group(1)}"
+            break
+    lines = [f"**Browser:** {browser}", f"**OS:** {os_name}", f"**Device:** {device}", f"**Engine:** {engine}", "", ut_block(ut_clip(ua, 500))]
+    await ut_send(message, "User Agent", "\n".join(lines))
+
+
+async def c_uuid(message, rest):
+    count = 1
+    if rest.strip().isdigit():
+        count = max(1, min(int(rest.strip()), 10))
+    await ut_send(message, "UUID v4", ut_block("\n".join(str(uuid.uuid4()) for _ in range(count))))
+
+
+async def c_whois(message, rest):
+    domain = ut_domain(rest.split()[0]) if rest else None
+    if not domain:
+        return await ut_usage(message, "`.whois <domain>`")
+    data = await ut_http(f"https://rdap.org/domain/{domain}", headers={**UT_UA, "Accept": "application/rdap+json"}, timeout=12)
+    if not data:
+        return await ut_fail(message, "No registration data found. The TLD may not support RDAP.")
+    events = {e.get("eventAction"): e.get("eventDate") for e in data.get("events", [])}
+    registrar = None
+    for ent in data.get("entities", []):
+        if "registrar" in ent.get("roles", []):
+            for item in ent.get("vcardArray", [None, []])[1]:
+                if item[0] == "fn":
+                    registrar = item[3]
+    nameservers = [n.get("ldhName", "").lower() for n in data.get("nameservers", [])]
+
+    def fmt(s):
+        if not s:
+            return "N/A"
+        try:
+            dt = datetime.fromisoformat(s.replace("Z", "+00:00"))
+            return f"<t:{int(dt.timestamp())}:F>"
+        except ValueError:
+            return s
+
+    lines = [
+        f"**Domain:** {data.get('ldhName', domain)}",
+        f"**Registrar:** {registrar or 'N/A'}",
+        f"**Registered:** {fmt(events.get('registration'))}",
+        f"**Last changed:** {fmt(events.get('last changed'))}",
+        f"**Expires:** {fmt(events.get('expiration'))}",
+        f"**Status:** {ut_clip(', '.join(data.get('status', [])) or 'N/A', 300)}",
+        f"**Nameservers:** {ut_clip(', '.join(nameservers) or 'N/A', 400)}",
+    ]
+    await ut_send(message, f"WHOIS — {domain}", "\n".join(lines))
+
+
+async def c_wordcount(message, rest):
+    text = ut_code(rest or ut_reply_text(message))
+    if not text:
+        return await ut_usage(message, "`.wordcount <text>` (or reply to a message)")
+    words = re.findall(r"\S+", text)
+    no_space = len(re.sub(r"\s", "", text))
+    sentences = len([x for x in re.split(r"[.!?]+", text) if x.strip()])
+    paragraphs = len([x for x in re.split(r"\n\s*\n", text) if x.strip()])
+    lines = [
+        f"**Words:** {len(words):,}",
+        f"**Unique words:** {len({w.lower().strip('.,!?;:') for w in words}):,}",
+        f"**Characters:** {len(text):,}",
+        f"**Characters (no spaces):** {no_space:,}",
+        f"**Lines:** {len(text.splitlines()):,}",
+        f"**Sentences:** {sentences:,}",
+        f"**Paragraphs:** {paragraphs:,}",
+        f"**Average word length:** {sum(len(w) for w in words) / len(words):.1f}",
+        f"**Reading time:** ~{max(1, round(len(words) / 200))} min",
+    ]
+    await ut_send(message, "Word Count", "\n".join(lines))
+
+
+UTIL_CMDS = {
+    "userinfo": c_userinfo, "serverinfo": c_serverinfo, "roleinfo": c_roleinfo, "channelinfo": c_channelinfo,
+    "inviteinfo": c_inviteinfo, "banner": c_banner, "botinfo": c_botinfo, "stats": c_stats,
+    "qr": c_qr, "translate": c_translate, "color": c_color, "math": c_math, "timestamp": c_timestamp,
+    "urban": c_urban, "stealsticker": c_stealsticker, "emojis": c_emojis, "activity": c_activity,
+    "ascii": c_ascii, "base": c_base, "base32": ut_codec("base32"), "base64": ut_codec("base64"),
+    "binary": ut_codec("binary"), "char": c_char, "cidr": c_cidr, "counting": c_counting,
+    "diff": c_diff, "dns": c_dns, "entropy": c_entropy, "expand": c_expand, "hash": c_hash,
+    "httpstatus": c_httpstatus, "iban": c_iban, "ip": c_ip, "json": c_json, "jwt": c_jwt,
+    "lorem": c_lorem, "morse": c_morse, "password": c_password, "regex": c_regex, "rot13": c_rot13,
+    "slugify": c_slugify, "sslcheck": c_sslcheck, "todo": c_todo, "urlencode": c_urlencode,
+    "useragent": c_useragent, "uuid": c_uuid, "whois": c_whois, "wordcount": c_wordcount,
+}
+
+
+async def util_prefix(message: discord.Message, cmd: str, args: list) -> bool:
+    fn = UTIL_CMDS.get(cmd)
+    if fn is None:
+        return False
+    now = time.time()
+    if now - ut_last.get(message.author.id, 0) < 2:
+        return True
+    ut_last[message.author.id] = now
+    try:
+        await fn(message, ut_rest(message))
+    except Exception as e:
+        print(f"Utility command {cmd} failed: {e}")
+        try:
+            await message.channel.send(view=tk_err(f"Something went wrong running `{cmd}`."))
+        except Exception:
+            pass
+    return True
 
 
 @bot.event
