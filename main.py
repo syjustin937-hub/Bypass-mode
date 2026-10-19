@@ -328,7 +328,8 @@ HELP_PAGES = [
         "`.cidr <ip/prefix>` Subnet calculator\n"
         "`.counting setup #channel` Counting game\n"
         "`.todo` Your personal todo list\n"
-        "`.help` Show this menu"
+        "`.help` Show this menu\n\n"
+        "Slash: `/info` `/tools` `/text` hold every utility command"
     ),
     (
         "Network & Dev",
@@ -366,14 +367,22 @@ HELP_PAGES = [
         "`.unban <userID>`\n"
         "`.timeout @user <minutes> [reason]`\n"
         "`.untimeout @user`\n"
-        "`.purge <amount>`\n\n"
-        "**Warnings**\n"
+        "`.purge <amount>`\n"
+        "`.mute @user [duration] [reason]`\n"
+        "`.unmute @user`\n"
+        "`.tempban @user <duration> [reason]`\n"
+        "`.hackban <userID> [reason]`\n"
+        "`.massban <id> <id> ... [reason]`\n\n"
+        "**Warnings & Cases**\n"
         "`.warn @user [reason]`\n"
-        "`.warns [@user]`\n"
-        "`.clearwarns @user`\n\n"
+        "`.warns [@user]` `.warninfo [@user]`\n"
+        "`.clearwarns @user` `.warnreset @user`\n"
+        "`.case view|list|recent|reason|remove|removeall`\n"
+        "`.appeals status|channel|window|questions`\n\n"
         "**Channels**\n"
-        "`.lock [#channel]`\n"
-        "`.unlock [#channel]`\n"
+        "`.lock [#channel]` `.unlock [#channel]`\n"
+        "`.hide [#channel]` `.unhide [#channel]`\n"
+        "`.nuke [#channel]`\n"
         "`.slowmode <seconds> [#channel]`"
     ),
     (
@@ -1658,7 +1667,12 @@ async def send_log(guild, category: str, view: discord.ui.LayoutView):
 
 async def log_mod(guild, action: str, moderator, target=None, reason=None, extra=None):
     icon, color = ACTION_STYLE.get(action, ("🛡️", discord.Color.blurple()))
+    case = record_case(action, moderator, target, reason)
+    if case and action == "Ban":
+        asyncio.create_task(appeal_notify(guild, target, reason))
     lines = [f"**Moderator:** {fmt_ref(moderator)}"]
+    if case:
+        lines.append(f"**Case:** #{case['id']}")
     if target is not None:
         lines.append(f"**Target:** {fmt_ref(target)}")
     if reason:
@@ -3276,6 +3290,9 @@ async def on_message(message):
         return
 
     if await util_prefix(message, cmd, args):
+        return
+
+    if await mod_prefix(message, cmd, args):
         return
 
     if cmd == "help":
@@ -7144,9 +7161,1213 @@ async def util_prefix(message: discord.Message, cmd: str, args: list) -> bool:
     return True
 
 
+from types import SimpleNamespace
+
+ACTION_STYLE.update({
+    "Tempban": ("⏱️", discord.Color.red()),
+    "Hackban": ("🔨", discord.Color.red()),
+    "Massban": ("🔨", discord.Color.dark_red()),
+    "Nuke": ("💥", discord.Color.orange()),
+    "Hide": ("🙈", discord.Color.red()),
+    "Unhide": ("👁️", discord.Color.green()),
+})
+
+CASE_ACTIONS = {"Kick", "Ban", "Unban", "Timeout", "Untimeout", "Warn", "Tempban", "Hackban", "Auto Kick"}
+MASSBAN_MAX = 50
+ID_RE = re.compile(r"\d{15,21}")
+DUR_RE = re.compile(r"(?:\d+[smhd])+|\d+")
+MOD_PREFIX_CMDS = (
+    "mute", "unmute", "tempban", "hackban", "massban", "nuke",
+    "hide", "unhide", "case", "warninfo", "warnreset", "appeals",
+)
+
+
+def dur_seconds(text: str) -> int:
+    t = text.strip().lower()
+    if t.isdigit():
+        return int(t) * 60
+    return parse_duration(t)
+
+
+def ap_cfg() -> dict:
+    c = config.setdefault("appeals", {})
+    c.setdefault("channel_id", None)
+    c.setdefault("window_days", 30)
+    c.setdefault("questions", ["Why were you banned?", "Why should we unban you?", "Anything else you want to add?"])
+    c.setdefault("bans", {})
+    c.setdefault("pending", [])
+    return c
+
+
+def record_case(action, moderator, target, reason):
+    if action not in CASE_ACTIONS or target is None or isinstance(target, discord.abc.GuildChannel):
+        return None
+    store = config.setdefault("cases", {"next": 1, "items": []})
+    now = int(time.time())
+    item = {
+        "id": store["next"],
+        "type": action,
+        "user_id": target.id,
+        "moderator_id": getattr(moderator, "id", None),
+        "reason": reason or "No reason provided",
+        "timestamp": now,
+    }
+    store["next"] += 1
+    store["items"].append(item)
+    if len(store["items"]) > 5000:
+        del store["items"][:len(store["items"]) - 5000]
+    cfg = ap_cfg()
+    if action in ("Ban", "Hackban"):
+        cfg["bans"][str(target.id)] = now
+    elif action == "Unban":
+        cfg["bans"].pop(str(target.id), None)
+    save_config(config)
+    return item
+
+
+def mod_can_target(guild, moderator, target):
+    if target.id == moderator.id:
+        return "You can't do that to yourself."
+    if target.id == guild.owner_id:
+        return "You can't do that to the server owner."
+    if isinstance(target, discord.Member):
+        if bot.user is not None and target.id == bot.user.id:
+            return "I can't do that to myself."
+        if moderator.id != guild.owner_id and target.top_role >= moderator.top_role:
+            return "That member has an equal or higher role than you."
+        if guild.me is not None and target.top_role >= guild.me.top_role:
+            return "That member has an equal or higher role than me."
+    return None
+
+
+async def act_mute(guild, moderator, member, seconds, reason):
+    problem = mod_can_target(guild, moderator, member)
+    if problem:
+        return FailedView(problem)
+    if seconds <= 0:
+        return FailedView("Invalid duration. Example: `10m`, `2h`, `1d`")
+    seconds = min(seconds, 2419200)
+    minutes = max(1, seconds // 60)
+    until = datetime.now(timezone.utc) + timedelta(seconds=seconds)
+    try:
+        mark_action("timeout", member.id)
+        await member.timeout(until, reason=reason)
+    except discord.Forbidden:
+        return FailedView("I don't have permission to timeout that member.")
+    except Exception as e:
+        return FailedView(str(e))
+    await log_mod(guild, "Timeout", moderator, member, reason, f"**Duration:** {fmt_time(seconds)}\n**Until:** <t:{int(until.timestamp())}:F>")
+    return TimeoutResultView(member, minutes, reason)
+
+
+async def act_unmute(guild, moderator, member):
+    try:
+        mark_action("untimeout", member.id)
+        await member.timeout(None)
+    except discord.Forbidden:
+        return FailedView("I don't have permission to remove that timeout.")
+    except Exception as e:
+        return FailedView(str(e))
+    await log_mod(guild, "Untimeout", moderator, member)
+    return UntimeoutResultView(member)
+
+
+async def act_tempban(guild, moderator, uid, seconds, reason):
+    member = guild.get_member(uid)
+    problem = mod_can_target(guild, moderator, member or discord.Object(id=uid))
+    if problem:
+        return FailedView(problem)
+    if seconds < 60:
+        return FailedView("Invalid duration. Example: `1h`, `2d`, `1d12h`")
+    try:
+        user = member or await bot.fetch_user(uid)
+    except discord.NotFound:
+        return FailedView("User not found.")
+    except Exception as e:
+        return FailedView(str(e))
+    try:
+        mark_action("ban", uid)
+        await guild.ban(user, reason=reason, delete_message_days=0)
+    except discord.Forbidden:
+        return FailedView("I don't have permission to ban that user.")
+    except Exception as e:
+        return FailedView(str(e))
+    until = int(time.time()) + seconds
+    config.setdefault("tempbans", {})[str(uid)] = {"until": until, "reason": reason}
+    save_config(config)
+    await log_mod(guild, "Tempban", moderator, user, reason, f"**Duration:** {fmt_time(seconds)}\n**Unbans:** <t:{until}:R>")
+    return InfoView(
+        "Member Temp-Banned",
+        f"**User:** {user.mention} (`{user.id}`)\n**Duration:** {fmt_time(seconds)}\n**Unbans:** <t:{until}:R>\n**Reason:** {reason}",
+        discord.Color.red(),
+    )
+
+
+async def tempban_loop():
+    await bot.wait_until_ready()
+    while True:
+        try:
+            data = config.get("tempbans", {})
+            now = int(time.time())
+            due = [uid for uid, t in data.items() if t["until"] <= now]
+            guild = bot.get_guild(GUILD_ID)
+            for uid in due:
+                if guild is None:
+                    break
+                try:
+                    mark_action("unban", int(uid))
+                    await guild.unban(discord.Object(id=int(uid)), reason="Tempban expired")
+                    try:
+                        user = await bot.fetch_user(int(uid))
+                    except Exception:
+                        user = discord.Object(id=int(uid))
+                    await log_mod(guild, "Unban", bot.user, user, "Tempban expired")
+                except discord.NotFound:
+                    pass
+                except Exception as e:
+                    print(f"Tempban unban failed: {e}")
+                    continue
+                data.pop(uid, None)
+            if due:
+                save_config(config)
+        except Exception as e:
+            print(f"Tempban loop error: {e}")
+        await asyncio.sleep(30)
+
+
+async def act_hackban(guild, moderator, uid, reason):
+    problem = mod_can_target(guild, moderator, guild.get_member(uid) or discord.Object(id=uid))
+    if problem:
+        return FailedView(problem)
+    try:
+        user = await bot.fetch_user(uid)
+    except discord.NotFound:
+        return FailedView("User not found.")
+    except Exception as e:
+        return FailedView(str(e))
+    try:
+        mark_action("ban", uid)
+        await guild.ban(user, reason=reason, delete_message_days=0)
+    except discord.Forbidden:
+        return FailedView("I don't have permission to ban that user.")
+    except Exception as e:
+        return FailedView(str(e))
+    await log_mod(guild, "Hackban", moderator, user, reason)
+    return BanResultView(user, reason)
+
+
+async def act_massban(guild, moderator, ids, reason):
+    ids = list(dict.fromkeys(ids))[:MASSBAN_MAX]
+    if not ids:
+        return FailedView("Provide at least one user ID or mention.")
+    done = []
+    failed = []
+    for uid in ids:
+        member = guild.get_member(uid)
+        if mod_can_target(guild, moderator, member or discord.Object(id=uid)):
+            failed.append(uid)
+            continue
+        try:
+            mark_action("ban", uid)
+            await guild.ban(discord.Object(id=uid), reason=reason, delete_message_days=0)
+            done.append(uid)
+            record_case("Ban", moderator, discord.Object(id=uid), reason)
+        except Exception:
+            failed.append(uid)
+        await asyncio.sleep(0.5)
+    await log_mod(
+        guild, "Massban", moderator, None, reason,
+        f"**Banned:** {len(done)}\n**Failed:** {len(failed)}\n**IDs:** {clip(' '.join(str(i) for i in done) or 'None', 600)}",
+    )
+    return InfoView(
+        "🔨 Mass Ban Complete",
+        f"**Banned:** {len(done)}\n**Failed:** {len(failed)}\n**Reason:** {reason}",
+        discord.Color.red(),
+    )
+
+
+def swap_channel_id(obj, old: int, new: int) -> bool:
+    changed = False
+    if isinstance(obj, dict):
+        for k, v in obj.items():
+            if isinstance(v, int) and not isinstance(v, bool) and v == old:
+                obj[k] = new
+                changed = True
+            elif isinstance(v, (dict, list)):
+                changed = swap_channel_id(v, old, new) or changed
+    elif isinstance(obj, list):
+        for i, v in enumerate(obj):
+            if isinstance(v, int) and not isinstance(v, bool) and v == old:
+                obj[i] = new
+                changed = True
+            elif isinstance(v, (dict, list)):
+                changed = swap_channel_id(v, old, new) or changed
+    return changed
+
+
+async def do_nuke(channel, moderator):
+    guild = channel.guild
+    position = channel.position
+    reason = f"Nuked by {moderator}"
+    new = await channel.clone(reason=reason)
+    await channel.delete(reason=reason)
+    try:
+        await new.edit(position=position)
+    except Exception:
+        pass
+    if swap_channel_id(config, channel.id, new.id):
+        save_config(config)
+    await log_mod(guild, "Nuke", moderator, new)
+    await new.send(view=InfoView("💥 Channel Nuked", f"This channel was nuked by {moderator.mention}.", discord.Color.orange()))
+    return new
+
+
+class NukeConfirmView(discord.ui.LayoutView):
+    def __init__(self, author_id: int, channel):
+        super().__init__(timeout=60)
+        self.author_id = author_id
+        self.channel = channel
+        yes = discord.ui.Button(label="Nuke", style=discord.ButtonStyle.danger)
+        no = discord.ui.Button(label="Cancel", style=discord.ButtonStyle.secondary)
+        yes.callback = self.on_yes
+        no.callback = self.on_no
+        self.add_item(
+            discord.ui.Container(
+                discord.ui.TextDisplay("# 💥 Nuke Channel"),
+                discord.ui.Separator(),
+                discord.ui.TextDisplay(f"This will delete and recreate {channel.mention}. Every message in it will be lost. Continue?"),
+                accent_color=discord.Color.red(),
+            )
+        )
+        self.add_item(discord.ui.ActionRow(yes, no))
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        allowed = interaction.user.id == self.author_id
+        if not allowed:
+            await interaction.response.send_message("Only the moderator who ran this can use these buttons.", ephemeral=True)
+        return allowed
+
+    async def on_yes(self, interaction: discord.Interaction):
+        self.stop()
+        await interaction.response.edit_message(view=InfoView("💥 Nuking", "Working...", discord.Color.red()))
+        try:
+            await do_nuke(self.channel, interaction.user)
+        except discord.Forbidden:
+            await interaction.followup.send(view=FailedView("I don't have permission to nuke that channel."), ephemeral=True)
+        except Exception as e:
+            await interaction.followup.send(view=FailedView(str(e)), ephemeral=True)
+
+    async def on_no(self, interaction: discord.Interaction):
+        self.stop()
+        await interaction.response.edit_message(view=InfoView("Cancelled", "The nuke was cancelled.", discord.Color.greyple()))
+
+
+async def act_visibility(guild, moderator, channel, hidden: bool):
+    overwrite = channel.overwrites_for(guild.default_role)
+    overwrite.view_channel = False if hidden else True
+    try:
+        await channel.set_permissions(guild.default_role, overwrite=overwrite)
+    except discord.Forbidden:
+        return FailedView("I don't have permission to edit that channel.")
+    except Exception as e:
+        return FailedView(str(e))
+    await log_mod(guild, "Hide" if hidden else "Unhide", moderator, channel)
+    if hidden:
+        return InfoView("🙈 Channel Hidden", f"{channel.mention} is now hidden from everyone.", discord.Color.red())
+    return InfoView("👁️ Channel Unhidden", f"{channel.mention} is now visible to everyone.", discord.Color.green())
+
+
+async def act_warnreset(guild, moderator, member):
+    config.setdefault("warns", {})[str(member.id)] = []
+    save_config(config)
+    await log_mod(guild, "Clear Warns", moderator, member)
+    return WarnsCleared(member)
+
+
+def case_line(c) -> str:
+    return f"**#{c['id']}** · {c['type']} · <@{c['user_id']}> · <t:{c['timestamp']}:R>\n> {clip(c['reason'], 160)}"
+
+
+def case_find(case_id: int):
+    return next((c for c in config.get("cases", {}).get("items", []) if c["id"] == case_id), None)
+
+
+def case_view_one(case_id: int):
+    c = case_find(case_id)
+    if not c:
+        return FailedView("Case not found.")
+    mod = f"<@{c['moderator_id']}>" if c.get("moderator_id") else "Unknown"
+    body = (
+        f"**Type:** {c['type']}\n"
+        f"**User:** <@{c['user_id']}> (`{c['user_id']}`)\n"
+        f"**Moderator:** {mod}\n"
+        f"**Date:** <t:{c['timestamp']}:F>\n"
+        f"**Reason:** {clip(c['reason'], 900)}"
+    )
+    return InfoView(f"📁 Case #{c['id']}", body, discord.Color.blurple())
+
+
+def case_list_view(user_id: int):
+    items = [c for c in config.get("cases", {}).get("items", []) if c["user_id"] == user_id]
+    if not items:
+        return InfoView("📁 Cases", f"No cases found for <@{user_id}>.")
+    lines = [case_line(c) for c in reversed(items[-15:])]
+    return InfoView(f"📁 Cases ({len(items)})", clip("\n".join(lines), 3800))
+
+
+def case_recent_view(amount: int):
+    amount = max(1, min(25, amount))
+    items = config.get("cases", {}).get("items", [])
+    if not items:
+        return InfoView("📁 Recent Cases", "No cases have been recorded yet.")
+    lines = [case_line(c) for c in reversed(items[-amount:])]
+    return InfoView("📁 Recent Cases", clip("\n".join(lines), 3800))
+
+
+async def case_set_reason(guild, moderator, case_id: int, reason: str):
+    c = case_find(case_id)
+    if not c:
+        return FailedView("Case not found.")
+    c["reason"] = clip(reason, 500)
+    save_config(config)
+    return ok("📁 Case Updated", f"Reason for case **#{case_id}** was updated.")
+
+
+def case_remove_one(case_id: int):
+    items = config.get("cases", {}).get("items", [])
+    c = case_find(case_id)
+    if not c:
+        return FailedView("Case not found.")
+    items.remove(c)
+    save_config(config)
+    return ok("📁 Case Removed", f"Case **#{case_id}** was removed.")
+
+
+def case_remove_user(user_id: int):
+    store = config.get("cases", {"items": []})
+    before = len(store["items"])
+    store["items"] = [c for c in store["items"] if c["user_id"] != user_id]
+    removed = before - len(store["items"])
+    save_config(config)
+    return ok("📁 Cases Removed", f"Removed **{removed}** case(s) for <@{user_id}>.")
+
+
+def ap_status_view():
+    cfg = ap_cfg()
+    channel = f"<#{cfg['channel_id']}>" if cfg["channel_id"] else "`Not set`"
+    state = "Enabled" if cfg["channel_id"] else "Disabled"
+    questions = "\n".join(f"{i}. {q}" for i, q in enumerate(cfg["questions"], 1))
+    body = (
+        f"**Status:** {state}\n"
+        f"**Channel:** {channel}\n"
+        f"**Window:** {cfg['window_days']} day(s) after a ban\n"
+        f"**Pending appeals:** {len(cfg['pending'])}\n\n"
+        f"**Questions**\n{questions}"
+    )
+    return InfoView("📨 Ban Appeals", body, discord.Color.blurple())
+
+
+def ap_set_channel(channel):
+    cfg = ap_cfg()
+    cfg["channel_id"] = channel.id
+    save_config(config)
+    return ok("📨 Appeals Channel Set", f"Appeals will be sent to {channel.mention}.")
+
+
+def ap_set_window(days: int):
+    if days < 1 or days > 365:
+        return FailedView("The window must be between 1 and 365 days.")
+    cfg = ap_cfg()
+    cfg["window_days"] = days
+    save_config(config)
+    return ok("📨 Appeal Window Set", f"Banned users can appeal for **{days}** day(s) after their ban.")
+
+
+def ap_set_questions(text: str):
+    questions = [q.strip() for q in re.split(r"\||\n", text) if q.strip()]
+    if not questions or len(questions) > 5:
+        return FailedView("Provide 1 to 5 questions separated by `|`.")
+    if any(len(q) > 45 for q in questions):
+        return FailedView("Each question must be 45 characters or less.")
+    cfg = ap_cfg()
+    cfg["questions"] = questions
+    save_config(config)
+    return ok("📨 Appeal Questions Set", "\n".join(f"{i}. {q}" for i, q in enumerate(questions, 1)))
+
+
+class AppealModal(discord.ui.Modal):
+    def __init__(self, questions):
+        super().__init__(title="Ban Appeal", timeout=900)
+        self.questions = questions
+        self.fields = []
+        for q in questions:
+            field = discord.ui.TextInput(label=q[:45], style=discord.TextStyle.paragraph, max_length=900)
+            self.fields.append(field)
+            self.add_item(field)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        guild = bot.get_guild(GUILD_ID)
+        cfg = ap_cfg()
+        channel = guild.get_channel(cfg["channel_id"]) if guild and cfg["channel_id"] else None
+        if channel is None:
+            await interaction.response.send_message("Appeals are not available right now.", ephemeral=True)
+            return
+        embed = discord.Embed(
+            title="📨 New Ban Appeal",
+            description=f"**User:** {interaction.user.mention} (`{interaction.user.id}`)",
+            color=discord.Color.blurple(),
+            timestamp=discord.utils.utcnow(),
+        )
+        embed.set_thumbnail(url=interaction.user.display_avatar.url)
+        for q, f in zip(self.questions, self.fields):
+            embed.add_field(name=q[:256], value=f.value[:1024], inline=False)
+        decision = discord.ui.View(timeout=None)
+        decision.add_item(AppealDecision("accept", interaction.user.id))
+        decision.add_item(AppealDecision("deny", interaction.user.id))
+        await channel.send(embed=embed, view=decision, allowed_mentions=NO_MENTIONS)
+        cfg["pending"].append(str(interaction.user.id))
+        save_config(config)
+        await interaction.response.send_message("Your appeal was submitted. Staff will review it.", ephemeral=True)
+
+
+class AppealStartView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
+
+    @discord.ui.button(label="Appeal Ban", style=discord.ButtonStyle.primary, custom_id="appeal:start")
+    async def start(self, interaction: discord.Interaction, button: discord.ui.Button):
+        cfg = ap_cfg()
+        uid = str(interaction.user.id)
+        banned_at = cfg["bans"].get(uid)
+        if not cfg["channel_id"] or banned_at is None:
+            await interaction.response.send_message("Appeals are not available for you.", ephemeral=True)
+            return
+        if time.time() - banned_at > cfg["window_days"] * 86400:
+            await interaction.response.send_message("The appeal window for your ban has closed.", ephemeral=True)
+            return
+        if uid in cfg["pending"]:
+            await interaction.response.send_message("You already have a pending appeal.", ephemeral=True)
+            return
+        guild = bot.get_guild(GUILD_ID)
+        try:
+            await guild.fetch_ban(discord.Object(id=interaction.user.id))
+        except discord.NotFound:
+            await interaction.response.send_message("You are not banned from the server.", ephemeral=True)
+            return
+        except Exception:
+            pass
+        await interaction.response.send_modal(AppealModal(cfg["questions"]))
+
+
+class AppealDecision(discord.ui.DynamicItem[discord.ui.Button], template=r"appeal:(?P<act>accept|deny):(?P<uid>\d+)"):
+    def __init__(self, act: str, uid: int):
+        super().__init__(
+            discord.ui.Button(
+                label="Accept" if act == "accept" else "Deny",
+                style=discord.ButtonStyle.success if act == "accept" else discord.ButtonStyle.danger,
+                custom_id=f"appeal:{act}:{uid}",
+            )
+        )
+        self.act = act
+        self.uid = int(uid)
+
+    @classmethod
+    async def from_custom_id(cls, interaction: discord.Interaction, item: discord.ui.Button, match):
+        return cls(match["act"], int(match["uid"]))
+
+    async def callback(self, interaction: discord.Interaction):
+        guild = bot.get_guild(GUILD_ID)
+        if guild is None or not interaction.user.guild_permissions.ban_members:
+            await interaction.response.send_message("You need Ban Members to decide appeals.", ephemeral=True)
+            return
+        cfg = ap_cfg()
+        accepted = self.act == "accept"
+        try:
+            user = await bot.fetch_user(self.uid)
+        except Exception:
+            user = None
+        note = ""
+        if accepted:
+            try:
+                mark_action("unban", self.uid)
+                await guild.unban(discord.Object(id=self.uid), reason=f"Appeal accepted by {interaction.user}")
+                await log_mod(guild, "Unban", interaction.user, user or discord.Object(id=self.uid), "Appeal accepted")
+            except discord.NotFound:
+                note = "\nThe user was not banned."
+            except Exception as e:
+                await interaction.response.send_message(view=FailedView(str(e)), ephemeral=True)
+                return
+        if str(self.uid) in cfg["pending"]:
+            cfg["pending"].remove(str(self.uid))
+        save_config(config)
+        embed = interaction.message.embeds[0] if interaction.message.embeds else discord.Embed(title="📨 Ban Appeal")
+        embed.color = discord.Color.green() if accepted else discord.Color.red()
+        embed.add_field(name="Decision", value=f"{'Accepted' if accepted else 'Denied'} by {interaction.user.mention}{note}", inline=False)
+        await interaction.response.edit_message(embed=embed, view=None)
+        if user is not None:
+            try:
+                await user.send(
+                    embed=discord.Embed(
+                        title=f"Your ban appeal in {guild.name}",
+                        description="Your appeal was **accepted**. You can rejoin the server." if accepted else "Your appeal was **denied**.",
+                        color=discord.Color.green() if accepted else discord.Color.red(),
+                    )
+                )
+            except Exception:
+                pass
+
+
+async def appeal_notify(guild, user, reason):
+    cfg = ap_cfg()
+    if not cfg["channel_id"]:
+        return
+    try:
+        embed = discord.Embed(
+            title=f"You were banned from {guild.name}",
+            description=f"**Reason:** {clip(reason or 'No reason provided', 500)}\n\nYou can appeal within {cfg['window_days']} day(s) using the button below.",
+            color=discord.Color.red(),
+        )
+        await user.send(embed=embed, view=AppealStartView())
+    except Exception:
+        pass
+
+
+def pf_uid(message, args, index=1):
+    if message.mentions:
+        return message.mentions[0].id
+    if len(args) > index:
+        m = ID_RE.fullmatch(args[index].strip("<@!>"))
+        if m:
+            return int(m.group())
+    return None
+
+
+def pf_member(message, args, index=1):
+    uid = pf_uid(message, args, index)
+    return message.guild.get_member(uid) if uid else None
+
+
+def pf_duration_reason(tokens, default):
+    if tokens and DUR_RE.fullmatch(tokens[0].lower()):
+        return dur_seconds(tokens[0]), " ".join(tokens[1:]) or "No reason provided"
+    return default, " ".join(tokens) or "No reason provided"
+
+
+async def mod_prefix(message, cmd, args) -> bool:
+    if cmd not in MOD_PREFIX_CMDS:
+        return False
+    guild = message.guild
+    author = message.author
+    perms = author.guild_permissions
+    send = message.channel.send
+    if cmd in ("mute", "unmute"):
+        if not perms.moderate_members:
+            return True
+        member = pf_member(message, args)
+        if member is None:
+            usage = "`.mute @user [duration] [reason]`" if cmd == "mute" else "`.unmute @user`"
+            await send(view=FailedView(f"Usage: {usage}"))
+            return True
+        if cmd == "mute":
+            seconds, reason = pf_duration_reason(args[2:], 600)
+            await send(view=await act_mute(guild, author, member, seconds, reason))
+        else:
+            await send(view=await act_unmute(guild, author, member))
+    elif cmd == "tempban":
+        if not perms.ban_members:
+            return True
+        uid = pf_uid(message, args)
+        if uid is None or len(args) < 3 or not DUR_RE.fullmatch(args[2].lower()):
+            await send(view=FailedView("Usage: `.tempban @user <duration> [reason]`"))
+            return True
+        reason = " ".join(args[3:]) or "No reason provided"
+        await send(view=await act_tempban(guild, author, uid, dur_seconds(args[2]), reason))
+    elif cmd == "hackban":
+        if not perms.ban_members:
+            return True
+        uid = pf_uid(message, args)
+        if uid is None:
+            await send(view=FailedView("Usage: `.hackban <userID> [reason]`"))
+            return True
+        reason = " ".join(args[2:]) or "No reason provided"
+        await send(view=await act_hackban(guild, author, uid, reason))
+    elif cmd == "massban":
+        if not perms.ban_members:
+            return True
+        ids = []
+        index = 1
+        while index < len(args):
+            m = ID_RE.fullmatch(args[index].strip("<@!>"))
+            if not m:
+                break
+            ids.append(int(m.group()))
+            index += 1
+        if not ids:
+            await send(view=FailedView("Usage: `.massban <id> <id> ... [reason]`"))
+            return True
+        reason = " ".join(args[index:]) or "No reason provided"
+        await send(view=await act_massban(guild, author, ids, reason))
+    elif cmd == "nuke":
+        if not perms.manage_channels:
+            return True
+        target = message.channel_mentions[0] if message.channel_mentions else message.channel
+        await send(view=NukeConfirmView(author.id, target))
+    elif cmd in ("hide", "unhide"):
+        if not perms.manage_channels:
+            return True
+        target = message.channel_mentions[0] if message.channel_mentions else message.channel
+        await send(view=await act_visibility(guild, author, target, cmd == "hide"))
+    elif cmd == "warninfo":
+        if not perms.moderate_members:
+            return True
+        member = message.mentions[0] if message.mentions else author
+        await send(view=WarnsListView(member, config.get("warns", {}).get(str(member.id), [])))
+    elif cmd == "warnreset":
+        if not perms.moderate_members:
+            return True
+        if not message.mentions:
+            await send(view=FailedView("Usage: `.warnreset @user`"))
+            return True
+        await send(view=await act_warnreset(guild, author, message.mentions[0]))
+    elif cmd == "case":
+        if not perms.moderate_members:
+            return True
+        sub = args[1].lower() if len(args) > 1 else ""
+        usage = "`.case view <id>` `.case list @user` `.case recent [amount]` `.case reason <id> <text>` `.case remove <id>` `.case removeall @user`"
+        if sub == "view" and len(args) > 2 and args[2].isdigit():
+            await send(view=case_view_one(int(args[2])))
+        elif sub == "list":
+            uid = pf_uid(message, args, 2)
+            if uid is None:
+                await send(view=FailedView(f"Usage: {usage}"))
+            else:
+                await send(view=case_list_view(uid))
+        elif sub == "recent":
+            amount = int(args[2]) if len(args) > 2 and args[2].isdigit() else 10
+            await send(view=case_recent_view(amount))
+        elif sub == "reason" and len(args) > 3 and args[2].isdigit():
+            await send(view=await case_set_reason(guild, author, int(args[2]), " ".join(args[3:])))
+        elif sub == "remove" and len(args) > 2 and args[2].isdigit():
+            if not perms.administrator:
+                return True
+            await send(view=case_remove_one(int(args[2])))
+        elif sub == "removeall":
+            if not perms.administrator:
+                return True
+            uid = pf_uid(message, args, 2)
+            if uid is None:
+                await send(view=FailedView(f"Usage: {usage}"))
+            else:
+                await send(view=case_remove_user(uid))
+        else:
+            await send(view=FailedView(f"Usage: {usage}"))
+    elif cmd == "appeals":
+        if not perms.manage_guild:
+            return True
+        sub = args[1].lower() if len(args) > 1 else "status"
+        usage = "`.appeals status` `.appeals channel #channel` `.appeals window <days>` `.appeals questions <q1 | q2 | q3>`"
+        if sub == "status":
+            await send(view=ap_status_view())
+        elif sub == "channel" and message.channel_mentions:
+            await send(view=ap_set_channel(message.channel_mentions[0]))
+        elif sub == "window" and len(args) > 2 and args[2].isdigit():
+            await send(view=ap_set_window(int(args[2])))
+        elif sub == "questions" and len(args) > 2:
+            await send(view=ap_set_questions(" ".join(args[2:])))
+        else:
+            await send(view=FailedView(f"Usage: {usage}"))
+    return True
+
+
+async def slash_send(interaction: discord.Interaction, view):
+    failed = isinstance(view, FailedView)
+    if interaction.response.is_done():
+        await interaction.followup.send(view=view, ephemeral=failed)
+    else:
+        await interaction.response.send_message(view=view, ephemeral=failed)
+
+
+async def slash_perm(interaction: discord.Interaction, perm: str) -> bool:
+    if getattr(interaction.user.guild_permissions, perm):
+        return True
+    await interaction.response.send_message(view=FailedView("You don't have permission to use this command."), ephemeral=True)
+    return False
+
+
+@tree.command(name="mute", description="Timeout a member", guild=GUILD_OBJ)
+@discord.app_commands.describe(member="Member to mute", duration="Duration, e.g. 10m, 2h, 1d", reason="Reason for the mute")
+@discord.app_commands.default_permissions(moderate_members=True)
+async def mute_cmd(interaction: discord.Interaction, member: discord.Member, duration: str = "10m", reason: str = "No reason provided"):
+    if not await slash_perm(interaction, "moderate_members"):
+        return
+    await slash_send(interaction, await act_mute(interaction.guild, interaction.user, member, dur_seconds(duration), reason))
+
+
+@tree.command(name="unmute", description="Remove a timeout from a member", guild=GUILD_OBJ)
+@discord.app_commands.describe(member="Member to unmute")
+@discord.app_commands.default_permissions(moderate_members=True)
+async def unmute_cmd(interaction: discord.Interaction, member: discord.Member):
+    if not await slash_perm(interaction, "moderate_members"):
+        return
+    await slash_send(interaction, await act_unmute(interaction.guild, interaction.user, member))
+
+
+@tree.command(name="tempban", description="Temporarily ban a user", guild=GUILD_OBJ)
+@discord.app_commands.describe(user="User to ban", duration="Duration, e.g. 1h, 2d, 1d12h", reason="Reason for the ban")
+@discord.app_commands.default_permissions(ban_members=True)
+async def tempban_cmd(interaction: discord.Interaction, user: discord.User, duration: str, reason: str = "No reason provided"):
+    if not await slash_perm(interaction, "ban_members"):
+        return
+    await interaction.response.defer()
+    await slash_send(interaction, await act_tempban(interaction.guild, interaction.user, user.id, dur_seconds(duration), reason))
+
+
+@tree.command(name="hackban", description="Ban a user by ID even if they are not in the server", guild=GUILD_OBJ)
+@discord.app_commands.describe(user_id="ID of the user to ban", reason="Reason for the ban")
+@discord.app_commands.default_permissions(ban_members=True)
+async def hackban_cmd(interaction: discord.Interaction, user_id: str, reason: str = "No reason provided"):
+    if not await slash_perm(interaction, "ban_members"):
+        return
+    m = ID_RE.fullmatch(user_id.strip("<@!>").strip())
+    if not m:
+        await slash_send(interaction, FailedView("Invalid user ID."))
+        return
+    await interaction.response.defer()
+    await slash_send(interaction, await act_hackban(interaction.guild, interaction.user, int(m.group()), reason))
+
+
+@tree.command(name="massban", description="Ban multiple users at once", guild=GUILD_OBJ)
+@discord.app_commands.describe(users="User IDs or mentions separated by spaces or commas", reason="Reason for the bans")
+@discord.app_commands.default_permissions(ban_members=True)
+async def massban_cmd(interaction: discord.Interaction, users: str, reason: str = "No reason provided"):
+    if not await slash_perm(interaction, "ban_members"):
+        return
+    ids = [int(i) for i in ID_RE.findall(users)]
+    await interaction.response.defer()
+    await slash_send(interaction, await act_massban(interaction.guild, interaction.user, ids, reason))
+
+
+@tree.command(name="nuke", description="Delete all messages in a channel by recreating it", guild=GUILD_OBJ)
+@discord.app_commands.describe(channel="Channel to nuke (defaults to this channel)")
+@discord.app_commands.default_permissions(manage_channels=True)
+async def nuke_cmd(interaction: discord.Interaction, channel: discord.TextChannel = None):
+    if not await slash_perm(interaction, "manage_channels"):
+        return
+    target = channel or interaction.channel
+    await interaction.response.send_message(view=NukeConfirmView(interaction.user.id, target), ephemeral=True)
+
+
+@tree.command(name="hide", description="Hide a channel from everyone", guild=GUILD_OBJ)
+@discord.app_commands.describe(channel="Channel to hide (defaults to this channel)")
+@discord.app_commands.default_permissions(manage_channels=True)
+async def hide_cmd(interaction: discord.Interaction, channel: discord.TextChannel = None):
+    if not await slash_perm(interaction, "manage_channels"):
+        return
+    await slash_send(interaction, await act_visibility(interaction.guild, interaction.user, channel or interaction.channel, True))
+
+
+@tree.command(name="unhide", description="Unhide a channel", guild=GUILD_OBJ)
+@discord.app_commands.describe(channel="Channel to unhide (defaults to this channel)")
+@discord.app_commands.default_permissions(manage_channels=True)
+async def unhide_cmd(interaction: discord.Interaction, channel: discord.TextChannel = None):
+    if not await slash_perm(interaction, "manage_channels"):
+        return
+    await slash_send(interaction, await act_visibility(interaction.guild, interaction.user, channel or interaction.channel, False))
+
+
+@tree.command(name="warninfo", description="View warnings for a user", guild=GUILD_OBJ)
+@discord.app_commands.describe(member="Member to check (defaults to you)")
+@discord.app_commands.default_permissions(moderate_members=True)
+async def warninfo_cmd(interaction: discord.Interaction, member: discord.Member = None):
+    if not await slash_perm(interaction, "moderate_members"):
+        return
+    member = member or interaction.user
+    await slash_send(interaction, WarnsListView(member, config.get("warns", {}).get(str(member.id), [])))
+
+
+@tree.command(name="warnreset", description="Reset a user's warning count", guild=GUILD_OBJ)
+@discord.app_commands.describe(member="Member whose warnings will be reset")
+@discord.app_commands.default_permissions(moderate_members=True)
+async def warnreset_cmd(interaction: discord.Interaction, member: discord.Member):
+    if not await slash_perm(interaction, "moderate_members"):
+        return
+    await slash_send(interaction, await act_warnreset(interaction.guild, interaction.user, member))
+
+
+case_group = discord.app_commands.Group(
+    name="case",
+    description="Moderation cases",
+    guild_ids=[GUILD_ID],
+    default_permissions=discord.Permissions(moderate_members=True),
+)
+
+
+@case_group.command(name="view", description="View a case")
+@discord.app_commands.describe(case_id="Case number")
+async def case_view_cmd(interaction: discord.Interaction, case_id: int):
+    if not await slash_perm(interaction, "moderate_members"):
+        return
+    await slash_send(interaction, case_view_one(case_id))
+
+
+@case_group.command(name="list", description="List cases for a user")
+@discord.app_commands.describe(user="User to look up")
+async def case_list_cmd(interaction: discord.Interaction, user: discord.User):
+    if not await slash_perm(interaction, "moderate_members"):
+        return
+    await slash_send(interaction, case_list_view(user.id))
+
+
+@case_group.command(name="recent", description="Show the most recent cases")
+@discord.app_commands.describe(amount="How many cases to show (1-25)")
+async def case_recent_cmd(interaction: discord.Interaction, amount: int = 10):
+    if not await slash_perm(interaction, "moderate_members"):
+        return
+    await slash_send(interaction, case_recent_view(amount))
+
+
+@case_group.command(name="reason", description="Change the reason of a case")
+@discord.app_commands.describe(case_id="Case number", reason="New reason")
+async def case_reason_cmd(interaction: discord.Interaction, case_id: int, reason: str):
+    if not await slash_perm(interaction, "moderate_members"):
+        return
+    await slash_send(interaction, await case_set_reason(interaction.guild, interaction.user, case_id, reason))
+
+
+@case_group.command(name="remove", description="Remove a case")
+@discord.app_commands.describe(case_id="Case number")
+async def case_remove_cmd(interaction: discord.Interaction, case_id: int):
+    if not await slash_perm(interaction, "administrator"):
+        return
+    await slash_send(interaction, case_remove_one(case_id))
+
+
+@case_group.command(name="removeall", description="Remove every case for a user")
+@discord.app_commands.describe(user="User whose cases will be removed")
+async def case_removeall_cmd(interaction: discord.Interaction, user: discord.User):
+    if not await slash_perm(interaction, "administrator"):
+        return
+    await slash_send(interaction, case_remove_user(user.id))
+
+
+tree.add_command(case_group)
+
+appeals_group = discord.app_commands.Group(
+    name="appeals",
+    description="Ban appeal system",
+    guild_ids=[GUILD_ID],
+    default_permissions=discord.Permissions(manage_guild=True),
+)
+
+
+@appeals_group.command(name="status", description="Show the appeal system settings")
+async def appeals_status_cmd(interaction: discord.Interaction):
+    if not await slash_perm(interaction, "manage_guild"):
+        return
+    await slash_send(interaction, ap_status_view())
+
+
+@appeals_group.command(name="channel", description="Set the channel that receives appeals")
+@discord.app_commands.describe(channel="Channel for appeals")
+async def appeals_channel_cmd(interaction: discord.Interaction, channel: discord.TextChannel):
+    if not await slash_perm(interaction, "manage_guild"):
+        return
+    await slash_send(interaction, ap_set_channel(channel))
+
+
+@appeals_group.command(name="window", description="Set how many days after a ban users can appeal")
+@discord.app_commands.describe(days="Number of days (1-365)")
+async def appeals_window_cmd(interaction: discord.Interaction, days: int):
+    if not await slash_perm(interaction, "manage_guild"):
+        return
+    await slash_send(interaction, ap_set_window(days))
+
+
+@appeals_group.command(name="questions", description="Set the appeal questions")
+@discord.app_commands.describe(questions="Up to 5 questions separated by |, 45 characters each")
+async def appeals_questions_cmd(interaction: discord.Interaction, questions: str):
+    if not await slash_perm(interaction, "manage_guild"):
+        return
+    await slash_send(interaction, ap_set_questions(questions))
+
+
+tree.add_command(appeals_group)
+
+
+class SlashChannel:
+    def __init__(self, interaction: discord.Interaction):
+        self._interaction = interaction
+        self._channel = interaction.channel
+        self.sent = False
+
+    def __getattr__(self, name):
+        return getattr(self._channel, name)
+
+    async def send(self, content=None, **kwargs):
+        kwargs.pop("reference", None)
+        kwargs.pop("mention_author", None)
+        self.sent = True
+        if content is not None:
+            return await self._interaction.followup.send(content, **kwargs)
+        return await self._interaction.followup.send(**kwargs)
+
+
+class SlashMessage:
+    def __init__(self, interaction: discord.Interaction, content: str, mentions=None, channel_mentions=None, role_mentions=None, reference=None):
+        self.interaction = interaction
+        self.author = interaction.user
+        self.guild = interaction.guild
+        self.channel = SlashChannel(interaction)
+        self.content = content
+        self.mentions = mentions or []
+        self.channel_mentions = channel_mentions or []
+        self.role_mentions = role_mentions or []
+        self.attachments = []
+        self.stickers = []
+        self.reference = reference
+        self.id = interaction.id
+        self.created_at = interaction.created_at
+        self.mention_everyone = False
+
+    async def delete(self, *args, **kwargs):
+        return None
+
+    async def add_reaction(self, *args, **kwargs):
+        return None
+
+    async def reply(self, content=None, **kwargs):
+        return await self.channel.send(content, **kwargs)
+
+
+async def run_util_slash(interaction: discord.Interaction, cmd: str, rest: str, mentions=None, channel_mentions=None, role_mentions=None, reference=None, ephemeral=False):
+    now = time.time()
+    if now - ut_last.get(interaction.user.id, 0) < 2:
+        await interaction.response.send_message(view=tk_err("Slow down a little before using another command."), ephemeral=True)
+        return
+    ut_last[interaction.user.id] = now
+    await interaction.response.defer(ephemeral=ephemeral)
+    msg = SlashMessage(interaction, f"{PREFIX}{cmd} {rest}".strip(), mentions, channel_mentions, role_mentions, reference)
+    try:
+        await UTIL_CMDS[cmd](msg, rest)
+    except Exception as e:
+        print(f"Utility command {cmd} failed: {e}")
+        try:
+            await interaction.followup.send(view=tk_err(f"Something went wrong running `{cmd}`."), ephemeral=True)
+            msg.channel.sent = True
+        except Exception:
+            pass
+    if not msg.channel.sent:
+        try:
+            await interaction.followup.send(view=ok("Done", f"`/{cmd}` finished."), ephemeral=True)
+        except Exception:
+            pass
+
+
+UT_INFO = discord.app_commands.Group(name="info", description="Information commands", guild_ids=[GUILD_ID])
+UT_TOOLS = discord.app_commands.Group(name="tools", description="Utility tools", guild_ids=[GUILD_ID])
+UT_TEXT = discord.app_commands.Group(name="text", description="Text, encoding and developer tools", guild_ids=[GUILD_ID])
+
+MODE_CHOICES = [
+    discord.app_commands.Choice(name="Encode", value="encode"),
+    discord.app_commands.Choice(name="Decode", value="decode"),
+]
+
+
+def sl_plain(group, name, desc, ephemeral=False):
+    async def cb(interaction: discord.Interaction):
+        await run_util_slash(interaction, name, "", ephemeral=ephemeral)
+    group.command(name=name, description=desc)(cb)
+
+
+def sl_text(group, name, desc, label, required=True, ephemeral=False):
+    if required:
+        async def cb(interaction: discord.Interaction, text: str):
+            await run_util_slash(interaction, name, text, ephemeral=ephemeral)
+    else:
+        async def cb(interaction: discord.Interaction, text: str = ""):
+            await run_util_slash(interaction, name, text, ephemeral=ephemeral)
+    discord.app_commands.describe(text=label)(cb)
+    group.command(name=name, description=desc)(cb)
+
+
+def sl_codec(group, name, desc):
+    async def cb(interaction: discord.Interaction, mode: discord.app_commands.Choice[str], text: str):
+        await run_util_slash(interaction, name, f"{mode.value} {text}")
+    discord.app_commands.describe(mode="Encode or decode", text="Text to convert")(cb)
+    discord.app_commands.choices(mode=MODE_CHOICES)(cb)
+    group.command(name=name, description=desc)(cb)
+
+
+for _n, _d in (
+    ("serverinfo", "View info about this server"),
+    ("botinfo", "View bot information"),
+    ("stats", "View server and bot stats"),
+    ("emojis", "List all server emojis"),
+):
+    sl_plain(UT_INFO, _n, _d)
+
+for _n, _d, _l in (
+    ("inviteinfo", "Inspect a Discord invite", "Invite link or code"),
+    ("whois", "Domain registration info", "Domain name"),
+    ("dns", "DNS records for a domain", "Domain, optionally followed by a record type"),
+    ("ip", "IP geolocation", "IP address or domain"),
+    ("sslcheck", "TLS certificate and expiry", "Domain name"),
+    ("httpstatus", "What an HTTP status code means", "Status code, e.g. 404"),
+    ("expand", "Unshorten a URL", "Shortened link"),
+):
+    sl_text(UT_INFO, _n, _d, _l)
+
+for _n, _d, _l, _r in (
+    ("qr", "Generate a QR code", "Text or link to encode", True),
+    ("color", "Info about a color", "Hex, RGB or color name", True),
+    ("math", "Evaluate a math expression", "Expression to evaluate", True),
+    ("timestamp", "Discord timestamp formats", "Time such as 'in 2 hours' (optional)", False),
+    ("urban", "Urban Dictionary lookup", "Word or phrase", True),
+    ("todo", "Your personal todo list", "Subcommand and text, e.g. add buy milk (optional)", False),
+    ("useragent", "Parse a user agent", "User agent string", True),
+    ("iban", "Validate an IBAN", "IBAN to validate", True),
+    ("cidr", "Subnet calculator", "IP with prefix, e.g. 192.168.1.0/24", True),
+    ("wordcount", "Count words and characters", "Text to analyze", True),
+):
+    sl_text(UT_TOOLS, _n, _d, _l, _r)
+
+for _n, _d, _l, _e in (
+    ("ascii", "Fancy Unicode fonts", "Text to convert", False),
+    ("char", "Unicode character info", "Characters to inspect", False),
+    ("entropy", "Password strength estimate", "Password or text to check", True),
+    ("hash", "Hash text with common algorithms", "Text to hash", False),
+    ("json", "Validate and pretty-print JSON", "JSON to format", False),
+    ("jwt", "Decode a JWT", "Token to decode", True),
+    ("rot13", "Apply ROT13 to text", "Text to convert", False),
+    ("slugify", "Make a URL-friendly slug", "Text to slugify", False),
+):
+    sl_text(UT_TEXT, _n, _d, _l, True, _e)
+
+for _n, _d in (
+    ("base32", "Encode or decode Base32"),
+    ("base64", "Encode or decode Base64"),
+    ("binary", "Encode or decode binary"),
+    ("morse", "Encode or decode Morse code"),
+    ("urlencode", "Percent-encode or decode text"),
+):
+    sl_codec(UT_TEXT, _n, _d)
+
+
+@UT_INFO.command(name="userinfo", description="View info about a user")
+@discord.app_commands.describe(user="User to look up (defaults to you)")
+async def sl_userinfo(interaction: discord.Interaction, user: discord.User = None):
+    await run_util_slash(interaction, "userinfo", "", mentions=[user] if user else [])
+
+
+@UT_INFO.command(name="banner", description="Get a user's banner")
+@discord.app_commands.describe(user="User to look up (defaults to you)")
+async def sl_banner(interaction: discord.Interaction, user: discord.User = None):
+    await run_util_slash(interaction, "banner", "", mentions=[user] if user else [])
+
+
+@UT_INFO.command(name="roleinfo", description="View info about a role")
+@discord.app_commands.describe(role="Role to look up")
+async def sl_roleinfo(interaction: discord.Interaction, role: discord.Role):
+    await run_util_slash(interaction, "roleinfo", role.mention, role_mentions=[role])
+
+
+@UT_INFO.command(name="channelinfo", description="View info about a channel")
+@discord.app_commands.describe(channel="Channel to look up (defaults to this channel)")
+async def sl_channelinfo(interaction: discord.Interaction, channel: discord.abc.GuildChannel = None):
+    await run_util_slash(interaction, "channelinfo", channel.mention if channel else "", channel_mentions=[channel] if channel else [])
+
+
+@UT_INFO.command(name="activity", description="Start a voice channel activity")
+@discord.app_commands.describe(name="Activity to start (join a voice channel first)")
+@discord.app_commands.choices(name=[discord.app_commands.Choice(name=v[0], value=k) for k, v in list(UT_ACTIVITIES.items())[:25]])
+async def sl_activity(interaction: discord.Interaction, name: discord.app_commands.Choice[str]):
+    await run_util_slash(interaction, "activity", name.value)
+
+
+@UT_INFO.command(name="counting", description="Set up or manage the counting game")
+@discord.app_commands.describe(action="What to do", channel="Channel for the counting game (setup only)")
+@discord.app_commands.choices(action=[
+    discord.app_commands.Choice(name="Setup", value="setup"),
+    discord.app_commands.Choice(name="Off", value="off"),
+    discord.app_commands.Choice(name="Reset", value="reset"),
+    discord.app_commands.Choice(name="Status", value="status"),
+])
+async def sl_counting(interaction: discord.Interaction, action: discord.app_commands.Choice[str], channel: discord.TextChannel = None):
+    await run_util_slash(
+        interaction, "counting", f"{action.value} {channel.mention if channel else ''}".strip(),
+        channel_mentions=[channel] if channel else [],
+    )
+
+
+@UT_INFO.command(name="stealsticker", description="Copy a sticker from a message into this server")
+@discord.app_commands.describe(message_id="ID of a message in this channel that has the sticker")
+async def sl_stealsticker(interaction: discord.Interaction, message_id: str):
+    try:
+        target = await interaction.channel.fetch_message(int(message_id))
+    except Exception:
+        await interaction.response.send_message(view=tk_err("Message not found in this channel."), ephemeral=True)
+        return
+    await run_util_slash(interaction, "stealsticker", "", reference=SimpleNamespace(resolved=target))
+
+
+@UT_TOOLS.command(name="translate", description="Translate text")
+@discord.app_commands.describe(language="Target language code, e.g. en, tl, ja", text="Text to translate")
+async def sl_translate(interaction: discord.Interaction, language: str, text: str):
+    await run_util_slash(interaction, "translate", f"{language} {text}")
+
+
+@UT_TOOLS.command(name="lorem", description="Generate placeholder text")
+@discord.app_commands.describe(amount="How many to generate", kind="Words, sentences or paragraphs")
+@discord.app_commands.choices(kind=[
+    discord.app_commands.Choice(name="Words", value="words"),
+    discord.app_commands.Choice(name="Sentences", value="sentences"),
+    discord.app_commands.Choice(name="Paragraphs", value="paragraphs"),
+])
+async def sl_lorem(interaction: discord.Interaction, amount: int = 3, kind: discord.app_commands.Choice[str] = None):
+    await run_util_slash(interaction, "lorem", f"{amount} {kind.value if kind else 'sentences'}")
+
+
+@UT_TOOLS.command(name="password", description="Generate a secure password and send it by DM")
+@discord.app_commands.describe(length="Password length")
+async def sl_password(interaction: discord.Interaction, length: int = 16):
+    await run_util_slash(interaction, "password", str(length), ephemeral=True)
+
+
+@UT_TOOLS.command(name="uuid", description="Generate random UUIDs")
+@discord.app_commands.describe(count="How many UUIDs")
+async def sl_uuid(interaction: discord.Interaction, count: int = 1):
+    await run_util_slash(interaction, "uuid", str(count))
+
+
+@UT_TOOLS.command(name="diff", description="Show the difference between two texts")
+@discord.app_commands.describe(first="First text", second="Second text")
+async def sl_diff(interaction: discord.Interaction, first: str, second: str):
+    await run_util_slash(interaction, "diff", f"{first} | {second}")
+
+
+@UT_TOOLS.command(name="regex", description="Test a regex against some text")
+@discord.app_commands.describe(pattern="Regex pattern", text="Text to test against")
+async def sl_regex(interaction: discord.Interaction, pattern: str, text: str):
+    await run_util_slash(interaction, "regex", f"{pattern} | {text}")
+
+
+@UT_TEXT.command(name="base", description="Convert a number between bases")
+@discord.app_commands.describe(number="Number to convert", from_base="Base it is in (2-36), e.g. 10", to_base="Base to convert to (2-36, optional)")
+async def sl_base(interaction: discord.Interaction, number: str, from_base: str, to_base: str = ""):
+    await run_util_slash(interaction, "base", f"{number} {from_base} {to_base}".strip())
+
+
+tree.add_command(UT_INFO)
+tree.add_command(UT_TOOLS)
+tree.add_command(UT_TEXT)
+
+
 @bot.event
 async def on_ready():
     bot.add_view(VerifyView())
+    bot.add_view(AppealStartView())
+    bot.add_dynamic_items(AppealDecision)
+    asyncio.create_task(tempban_loop())
     bot.add_view(GiveawayPersistentView())
     bot.add_view(TicketPanelPersistentView())
     bot.add_view(TicketControlsPersistentView())
