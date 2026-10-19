@@ -332,7 +332,16 @@ HELP_PAGES = [
         "**Auto Responder**\n"
         "`/autoresponder add|edit|remove|list|clear`\n"
         "`.ar add <trigger> | <reply>` `.ar add <trigger>` `.ar list`\n"
-        "Variables: `{user}` `{username}` `{server}` `{channel}` `{membercount}`"
+        "Variables: `{user}` `{username}` `{server}` `{channel}` `{membercount}` `{avatar}`"
+    ),
+    (
+        "Welcome",
+        "`/welcome setup #channel [role]`\n"
+        "`/welcome design` (container builder)\n"
+        "`/welcome test` `/welcome toggle`\n"
+        "`/welcome autorole [role]` `/welcome reset` `/welcome status`\n\n"
+        "Prefix: `.welcome setup #channel` `.welcome design` `.welcome test`\n"
+        "Variables: `{user}` `{username}` `{server}` `{membercount}` `{avatar}`"
     ),
 ]
 
@@ -3221,6 +3230,11 @@ async def on_message(message):
             return
         await message.channel.send(view=EmbedBuilderView(message.author.id))
 
+    elif cmd == "welcome":
+        if not message.author.guild_permissions.manage_guild:
+            return
+        await wl_prefix(message)
+
     elif cmd in ("autoresponder", "ar"):
         if not message.author.guild_permissions.manage_guild:
             return
@@ -3591,6 +3605,7 @@ async def on_member_join(member):
         return
     asyncio.create_task(antiraid_on_join(member))
     asyncio.create_task(antinuke_bot_add(member))
+    asyncio.create_task(wl_on_join(member))
     age = (discord.utils.utcnow() - member.created_at).days
     body = (
         f"**User:** {fmt_ref(member)}\n"
@@ -4471,7 +4486,7 @@ def eb_render_into(container: discord.ui.Container, comp: dict, transform=None) 
     elif t == "section":
         url = comp.get("thumbnail_url")
         if url:
-            section = discord.ui.Section(accessory=discord.ui.Thumbnail(media=url))
+            section = discord.ui.Section(accessory=discord.ui.Thumbnail(media=tf(url)))
             section.add_item(discord.ui.TextDisplay(tf(comp["content"])))
             container.add_item(section)
         else:
@@ -4480,7 +4495,7 @@ def eb_render_into(container: discord.ui.Container, comp: dict, transform=None) 
         if comp["urls"]:
             gallery = discord.ui.MediaGallery()
             for u in comp["urls"]:
-                gallery.add_item(media=u)
+                gallery.add_item(media=tf(u))
             container.add_item(gallery)
     elif t == "button_row":
         if comp["buttons"]:
@@ -4575,8 +4590,8 @@ class EbSectionModal(discord.ui.Modal):
 
     async def on_submit(self, interaction: discord.Interaction):
         url = self._url.value.strip() or None
-        if url and not url.startswith(("http://", "https://")):
-            await interaction.response.send_message("Thumbnail must be a valid http(s) URL.", ephemeral=True)
+        if url and not (url.startswith(("http://", "https://")) or url == "{avatar}"):
+            await interaction.response.send_message("Thumbnail must be a valid http(s) URL or `{avatar}`.", ephemeral=True)
             return
         await self._v._commit(interaction, {"type": "section", "content": self._text.value, "thumbnail_url": url}, self._i)
 
@@ -4598,7 +4613,7 @@ class EbGalleryModal(discord.ui.Modal):
         self.add_item(self._urls)
 
     async def on_submit(self, interaction: discord.Interaction):
-        lines = [ln.strip() for ln in self._urls.value.splitlines() if ln.strip().startswith(("http://", "https://"))]
+        lines = [ln.strip() for ln in self._urls.value.splitlines() if ln.strip().startswith(("http://", "https://")) or ln.strip() == "{avatar}"]
         if not lines:
             await interaction.response.send_message("No valid image URLs found.", ephemeral=True)
             return
@@ -4675,7 +4690,7 @@ class EmbedBuilderView(discord.ui.LayoutView):
             c.add_item(discord.ui.TextDisplay("-# Your container is empty. Use the controls below to add components."))
         else:
             for comp in self._data:
-                eb_render_into(c, comp)
+                eb_render_into(c, comp, lambda s: s.replace("{avatar}", "https://cdn.discordapp.com/embed/avatars/0.png"))
         return c
 
     def _cancel_row(self):
@@ -4958,7 +4973,7 @@ class EmbedBuilderView(discord.ui.LayoutView):
             return
         try:
             await channel.send(
-                view=eb_make_view(self._data, self._color_key),
+                view=eb_make_view(self._data, self._color_key, lambda s: s.replace("{avatar}", interaction.user.display_avatar.url)),
                 allowed_mentions=discord.AllowedMentions(everyone=False, roles=True, users=True)
             )
         except discord.Forbidden:
@@ -5035,6 +5050,7 @@ def ar_vars(text: str, message: discord.Message) -> str:
         .replace("{server}", message.guild.name)
         .replace("{channel}", message.channel.mention)
         .replace("{membercount}", str(message.guild.member_count))
+        .replace("{avatar}", message.author.display_avatar.url)
     )
 
 
@@ -5240,6 +5256,255 @@ async def ar_prefix(message: discord.Message):
         await message.channel.send(view=TicketInfoView(f"Auto Responders ({len(ar_list())})", ar_summary()))
     else:
         await message.channel.send(view=TicketInfoView("Auto Responder", usage))
+
+
+def wl_cfg() -> dict:
+    c = config.setdefault("welcome", {})
+    c.setdefault("enabled", False)
+    c.setdefault("channel_id", None)
+    c.setdefault("autorole_id", None)
+    c.setdefault("data", None)
+    c.setdefault("color", "none")
+    return c
+
+
+def wl_default_data() -> list:
+    return [
+        {
+            "type": "section",
+            "content": "# Welcome to {server}!\nHey {user}, glad to have you here.\nYou are member **#{membercount}**.",
+            "thumbnail_url": "{avatar}"
+        },
+        {"type": "separator", "divider": True, "spacing": "small"},
+        {"type": "text", "content": "-# Make yourself at home and enjoy your stay."}
+    ]
+
+
+def wl_vars(text: str, member: discord.Member) -> str:
+    return (
+        text.replace("{user}", member.mention)
+        .replace("{username}", member.display_name)
+        .replace("{server}", member.guild.name)
+        .replace("{membercount}", str(member.guild.member_count))
+        .replace("{avatar}", member.display_avatar.url)
+    )
+
+
+async def wl_send(member: discord.Member, channel) -> None:
+    c = wl_cfg()
+    data = c.get("data") or wl_default_data()
+    view = eb_make_view(data, c.get("color", "none"), lambda s: wl_vars(s, member))
+    await channel.send(view=view, allowed_mentions=discord.AllowedMentions(users=True, roles=False, everyone=False))
+
+
+async def wl_on_join(member: discord.Member) -> None:
+    if member.bot:
+        return
+    c = wl_cfg()
+    if c.get("autorole_id"):
+        role = member.guild.get_role(c["autorole_id"])
+        if role:
+            try:
+                await member.add_roles(role, reason="Welcome auto role")
+            except Exception as e:
+                print(f"Welcome auto role failed: {e}")
+    if not c.get("enabled") or not c.get("channel_id"):
+        return
+    channel = member.guild.get_channel(c["channel_id"])
+    if channel is None:
+        return
+    try:
+        await wl_send(member, channel)
+    except Exception as e:
+        print(f"Welcome message failed: {e}")
+
+
+def wl_builder(author_id: int) -> EmbedBuilderView:
+    c = wl_cfg()
+
+    async def cb(interaction, built, color):
+        cfg = wl_cfg()
+        cfg["data"] = built
+        cfg["color"] = color
+        save_config(config)
+        return "Welcome message saved. Use `/welcome test` to preview it."
+
+    return EmbedBuilderView(author_id, c.get("data") or wl_default_data(), c.get("color", "none"), cb, "Welcome Message")
+
+
+def wl_status_text(guild: discord.Guild) -> str:
+    c = wl_cfg()
+    channel = guild.get_channel(c["channel_id"]) if c.get("channel_id") else None
+    role = guild.get_role(c["autorole_id"]) if c.get("autorole_id") else None
+    return (
+        f"**Status:** {'🟢 Enabled' if c.get('enabled') else '🔴 Disabled'}\n"
+        f"**Channel:** {channel.mention if channel else 'Not set'}\n"
+        f"**Auto role:** {role.mention if role else 'None'}\n"
+        f"**Message:** {'Custom' if c.get('data') else 'Default'}\n\n"
+        "**Variables:** `{user}` `{username}` `{server}` `{membercount}` `{avatar}`"
+    )
+
+
+def wl_denied(user) -> bool:
+    return not user.guild_permissions.manage_guild
+
+
+wl_group = discord.app_commands.Group(
+    name="welcome",
+    description="Welcome system commands",
+    guild_ids=[GUILD_ID],
+    default_permissions=discord.Permissions(manage_guild=True)
+)
+
+
+@wl_group.command(name="setup", description="Set the welcome channel and enable the welcome system")
+@discord.app_commands.describe(channel="Channel where welcome messages are sent", autorole="Role given to new members (optional)")
+async def wl_setup(interaction: discord.Interaction, channel: discord.TextChannel, autorole: discord.Role = None):
+    if wl_denied(interaction.user):
+        await interaction.response.send_message(view=tk_err("You need Manage Server to use this."), ephemeral=True)
+        return
+    c = wl_cfg()
+    c["channel_id"] = channel.id
+    c["enabled"] = True
+    if autorole:
+        c["autorole_id"] = autorole.id
+    save_config(config)
+    await interaction.response.send_message(
+        view=TicketInfoView("Welcome System Ready", wl_status_text(interaction.guild) + "\n\nUse `/welcome design` to customize the message."),
+        ephemeral=True
+    )
+
+
+@wl_group.command(name="design", description="Design the welcome message in the container builder")
+async def wl_design(interaction: discord.Interaction):
+    if wl_denied(interaction.user):
+        await interaction.response.send_message(view=tk_err("You need Manage Server to use this."), ephemeral=True)
+        return
+    await interaction.response.send_message(view=wl_builder(interaction.user.id), ephemeral=True)
+
+
+@wl_group.command(name="test", description="Send a test welcome message using your account")
+async def wl_test(interaction: discord.Interaction):
+    if wl_denied(interaction.user):
+        await interaction.response.send_message(view=tk_err("You need Manage Server to use this."), ephemeral=True)
+        return
+    c = wl_cfg()
+    channel = interaction.guild.get_channel(c["channel_id"]) if c.get("channel_id") else interaction.channel
+    try:
+        await wl_send(interaction.user, channel)
+    except Exception as e:
+        await interaction.response.send_message(view=tk_err(f"Could not send the test message: `{e}`"), ephemeral=True)
+        return
+    await interaction.response.send_message(view=tk_ok("Test Sent", f"Sent a test welcome message to {channel.mention}."), ephemeral=True)
+
+
+@wl_group.command(name="toggle", description="Turn the welcome message on or off")
+async def wl_toggle(interaction: discord.Interaction):
+    if wl_denied(interaction.user):
+        await interaction.response.send_message(view=tk_err("You need Manage Server to use this."), ephemeral=True)
+        return
+    c = wl_cfg()
+    if not c.get("channel_id"):
+        await interaction.response.send_message(view=tk_err("Set a channel first with `/welcome setup`."), ephemeral=True)
+        return
+    c["enabled"] = not c["enabled"]
+    save_config(config)
+    await interaction.response.send_message(view=tk_ok("Welcome System", f"Welcome messages are now **{'enabled' if c['enabled'] else 'disabled'}**."), ephemeral=True)
+
+
+@wl_group.command(name="autorole", description="Set or clear the role given to new members")
+@discord.app_commands.describe(role="Role to give (leave empty to clear)")
+async def wl_autorole(interaction: discord.Interaction, role: discord.Role = None):
+    if wl_denied(interaction.user):
+        await interaction.response.send_message(view=tk_err("You need Manage Server to use this."), ephemeral=True)
+        return
+    c = wl_cfg()
+    c["autorole_id"] = role.id if role else None
+    save_config(config)
+    await interaction.response.send_message(
+        view=tk_ok("Auto Role", f"New members will receive {role.mention}." if role else "Auto role cleared."),
+        ephemeral=True
+    )
+
+
+@wl_group.command(name="reset", description="Reset the welcome message to the default design")
+async def wl_reset(interaction: discord.Interaction):
+    if wl_denied(interaction.user):
+        await interaction.response.send_message(view=tk_err("You need Manage Server to use this."), ephemeral=True)
+        return
+    c = wl_cfg()
+    c["data"] = None
+    c["color"] = "none"
+    save_config(config)
+    await interaction.response.send_message(view=tk_ok("Welcome Message Reset", "The default design is back."), ephemeral=True)
+
+
+@wl_group.command(name="status", description="Show the welcome system settings")
+async def wl_status(interaction: discord.Interaction):
+    if wl_denied(interaction.user):
+        await interaction.response.send_message(view=tk_err("You need Manage Server to use this."), ephemeral=True)
+        return
+    await interaction.response.send_message(view=TicketInfoView("Welcome System", wl_status_text(interaction.guild)), ephemeral=True)
+
+
+tree.add_command(wl_group, guild=discord.Object(id=GUILD_ID))
+
+
+async def wl_prefix(message: discord.Message):
+    parts = message.content[len(PREFIX):].split(None, 2)
+    sub = parts[1].lower() if len(parts) > 1 else ""
+    c = wl_cfg()
+    usage = (
+        "`.welcome setup #channel [@role]`\n"
+        "`.welcome design` `.welcome test` `.welcome toggle`\n"
+        "`.welcome autorole @role|off` `.welcome reset` `.welcome status`"
+    )
+    if sub == "setup":
+        if not message.channel_mentions:
+            await message.channel.send(view=TicketInfoView("Welcome System", usage))
+            return
+        c["channel_id"] = message.channel_mentions[0].id
+        c["enabled"] = True
+        if message.role_mentions:
+            c["autorole_id"] = message.role_mentions[0].id
+        save_config(config)
+        await message.channel.send(view=TicketInfoView("Welcome System Ready", wl_status_text(message.guild) + "\n\nUse `.welcome design` to customize the message."))
+    elif sub == "design":
+        await message.channel.send(view=wl_builder(message.author.id))
+    elif sub == "test":
+        channel = message.guild.get_channel(c["channel_id"]) if c.get("channel_id") else message.channel
+        try:
+            await wl_send(message.author, channel)
+        except Exception as e:
+            await message.channel.send(view=tk_err(f"Could not send the test message: `{e}`"))
+            return
+        if channel.id != message.channel.id:
+            await message.channel.send(view=tk_ok("Test Sent", f"Sent a test welcome message to {channel.mention}."))
+    elif sub == "toggle":
+        if not c.get("channel_id"):
+            await message.channel.send(view=tk_err("Set a channel first with `.welcome setup #channel`."))
+            return
+        c["enabled"] = not c["enabled"]
+        save_config(config)
+        await message.channel.send(view=tk_ok("Welcome System", f"Welcome messages are now **{'enabled' if c['enabled'] else 'disabled'}**."))
+    elif sub == "autorole":
+        if message.role_mentions:
+            c["autorole_id"] = message.role_mentions[0].id
+            save_config(config)
+            await message.channel.send(view=tk_ok("Auto Role", f"New members will receive {message.role_mentions[0].mention}."))
+        else:
+            c["autorole_id"] = None
+            save_config(config)
+            await message.channel.send(view=tk_ok("Auto Role", "Auto role cleared."))
+    elif sub == "reset":
+        c["data"] = None
+        c["color"] = "none"
+        save_config(config)
+        await message.channel.send(view=tk_ok("Welcome Message Reset", "The default design is back."))
+    elif sub == "status":
+        await message.channel.send(view=TicketInfoView("Welcome System", wl_status_text(message.guild)))
+    else:
+        await message.channel.send(view=TicketInfoView("Welcome System", usage))
 
 
 @bot.event
