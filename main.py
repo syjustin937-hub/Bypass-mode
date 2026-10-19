@@ -442,10 +442,20 @@ HELP_PAGES = [
 ]
 
 
+HELP_CATEGORIES = [
+    ("Moderation", ["Moderation", "Moderation Plus", "Security & Logs"]),
+    ("Utility", ["Information", "Tools", "Network & Dev", "Text & Web Tools"]),
+    ("Economy", ["Economy"]),
+    ("Server Setup", ["Welcome", "Giveaway, Ticket & Auto Responder"]),
+    ("More", ["More"]),
+]
+
+
 class HelpNavButton(discord.ui.Button):
-    def __init__(self, label: str, target: int, view_ref, disabled: bool = False):
-        super().__init__(label=label, style=discord.ButtonStyle.secondary, disabled=disabled)
-        self.target = target
+    def __init__(self, label: str, category, page: int, view_ref, style=discord.ButtonStyle.secondary, disabled: bool = False):
+        super().__init__(label=label, style=style, disabled=disabled)
+        self.category = category
+        self.page = page
         self.view_ref = view_ref
 
     async def callback(self, interaction: discord.Interaction):
@@ -453,31 +463,47 @@ class HelpNavButton(discord.ui.Button):
         if owner and interaction.user.id != owner:
             await interaction.response.send_message("Only the person who ran this command can use these buttons.", ephemeral=True)
             return
-        await interaction.response.edit_message(view=HelpView(owner, self.target))
+        await interaction.response.edit_message(view=HelpView(owner, self.category, self.page))
 
 
 class HelpView(discord.ui.LayoutView):
-    def __init__(self, author_id: int = None, page: int = 0):
+    def __init__(self, author_id: int = None, category: str = None, page: int = 0):
         super().__init__(timeout=300)
         self.author_id = author_id
-        self.page = max(0, min(page, len(HELP_PAGES) - 1))
-        total = len(HELP_PAGES)
-        name, body = HELP_PAGES[self.page]
+        page_names = dict(HELP_CATEGORIES).get(category)
+        bodies = dict(HELP_PAGES)
+        if page_names is None:
+            name = bot.user.name if bot.user else "Help"
+            header = discord.ui.TextDisplay(f"# {name}\nPrefix `{PREFIX}` · Browse the categories below")
+            container = discord.ui.Container(accent_color=discord.Color.blurple())
+            if bot.user:
+                section = discord.ui.Section(accessory=discord.ui.Thumbnail(media=bot.user.display_avatar.url))
+                section.add_item(header)
+                container.add_item(section)
+            else:
+                container.add_item(header)
+            container.add_item(discord.ui.Separator())
+            buttons = [HelpNavButton(cat, cat, 0, self) for cat, _ in HELP_CATEGORIES]
+            for start in range(0, len(buttons), 3):
+                container.add_item(discord.ui.ActionRow(*buttons[start:start + 3]))
+            self.add_item(container)
+            return
+        total = len(page_names)
+        self.page = max(0, min(page, total - 1))
+        page_name = page_names[self.page]
         self.add_item(
             discord.ui.Container(
-                discord.ui.TextDisplay(f"# Help — {name}"),
+                discord.ui.TextDisplay(f"# {category}: Page {self.page + 1}/{total}\n-# {page_name}"),
                 discord.ui.Separator(),
-                discord.ui.TextDisplay(body),
+                discord.ui.TextDisplay(bodies[page_name]),
                 discord.ui.Separator(),
-                discord.ui.TextDisplay(f"-# Prefix: `.` | Page {self.page + 1}/{total}"),
-            )
-        )
-        indicator = discord.ui.Button(label=f"{self.page + 1} / {total}", style=discord.ButtonStyle.primary, disabled=True)
-        self.add_item(
-            discord.ui.ActionRow(
-                HelpNavButton("<< Back", self.page - 1, self, disabled=self.page == 0),
-                indicator,
-                HelpNavButton("Next >>", self.page + 1, self, disabled=self.page >= total - 1),
+                discord.ui.TextDisplay(f"-# Prefix: `{PREFIX}` | Slash commands work too"),
+                discord.ui.ActionRow(
+                    HelpNavButton("Back", None, 0, self, discord.ButtonStyle.primary),
+                    HelpNavButton("Previous", category, self.page - 1, self, disabled=self.page == 0),
+                    HelpNavButton("Next", category, self.page + 1, self, disabled=self.page >= total - 1),
+                ),
+                accent_color=discord.Color.blurple()
             )
         )
 
