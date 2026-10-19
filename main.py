@@ -339,7 +339,8 @@ class HelpView(discord.ui.LayoutView):
                 discord.ui.TextDisplay(
                     "**Utility Commands**\n"
                     "`.ping`\n"
-                    "`.say #channel <message>`\n"
+                    "`.say <message>`\n"
+                    "`.embed`\n"
                     "`.afk [reason]`\n"
                     "`.snipe`\n"
                     "`.avatar [@user]`\n"
@@ -2382,12 +2383,12 @@ async def autobypass(interaction: discord.Interaction, channel: discord.TextChan
 
 
 @tree.command(name="say", description="Send a message as the bot", guild=discord.Object(id=GUILD_ID))
-@discord.app_commands.describe(channel="Channel to send the message in", message="Message content")
+@discord.app_commands.describe(message="Message content")
 @discord.app_commands.default_permissions(administrator=True)
-async def say(interaction: discord.Interaction, channel: discord.TextChannel, message: str):
+async def say(interaction: discord.Interaction, message: str):
     try:
-        await channel.send(message)
-        await interaction.response.send_message(view=SayView(channel, message), ephemeral=True)
+        await interaction.channel.send(message)
+        await interaction.response.send_message(view=SayView(interaction.channel, message), ephemeral=True)
     except Exception as e:
         await interaction.response.send_message(view=FailedView(str(e)), ephemeral=True)
 
@@ -3086,7 +3087,7 @@ async def on_message_delete(message):
             "author_id": message.author.id,
             "timestamp": int(message.created_at.timestamp())
         }
-    if message.guild and not message.content.lower().startswith(f"{PREFIX}purge"):
+    if message.guild and not message.content.lower().startswith((f"{PREFIX}purge", f"{PREFIX}say")):
         await log_message_delete(message)
 
 
@@ -3183,18 +3184,20 @@ async def on_message(message):
     elif cmd == "say":
         if not message.author.guild_permissions.administrator:
             return
-        if not message.channel_mentions or len(args) < 3:
-            await message.channel.send(view=FailedView("Usage: `.say #channel <message>`"))
-            return
-        target_channel = message.channel_mentions[0]
-        full = message.content[len(PREFIX) + len("say "):].strip()
-        mention_str = target_channel.mention
-        content = full[full.index(mention_str) + len(mention_str):].strip() if mention_str in full else " ".join(args[2:])
+        content = message.content[len(PREFIX) + len("say"):].strip()
         if not content:
-            await message.channel.send(view=FailedView("Please provide a message to send."))
+            await message.channel.send(view=FailedView("Usage: `.say <message>`"))
             return
-        await target_channel.send(content)
-        await message.channel.send(view=SayView(target_channel, content))
+        try:
+            await message.delete()
+        except Exception:
+            pass
+        await message.channel.send(content)
+
+    elif cmd == "embed":
+        if not message.author.guild_permissions.manage_messages:
+            return
+        await message.channel.send(view=EmbedBuilderView(message.author.id))
 
     elif cmd == "kick":
         if not message.author.guild_permissions.kick_members:
@@ -3846,9 +3849,6 @@ async def on_webhooks_update(channel):
         print(f"Webhook audit failed: {e}")
 
 
-# ======================================================================
-# TICKET SYSTEM
-# ======================================================================
 TICKET_BANNER = "ticket_banner.png"
 TICKET_BANNER_NAME = "ticket_banner.png"
 
@@ -3869,7 +3869,6 @@ def tk_is_staff(member: discord.Member) -> bool:
 
 
 def tk_find_open(guild: discord.Guild, user_id: int):
-    """Return the open ticket channel of a user (cleans stale entries)."""
     t = tk_cfg()
     for cid, data in list(t["open"].items()):
         if data["user_id"] != user_id:
@@ -3889,7 +3888,6 @@ def tk_safe_name(name: str) -> str:
 
 
 class TicketInfoView(discord.ui.LayoutView):
-    """Plain container with no accent color."""
     def __init__(self, title: str, body: str, color=None):
         super().__init__(timeout=None)
         self.add_item(
@@ -4011,7 +4009,6 @@ class TicketControlsPersistentView(discord.ui.View):
 
 
 class TicketPanelView(discord.ui.LayoutView):
-    """Banner + text inside the container, Open Ticket button OUTSIDE it."""
     def __init__(self, with_banner: bool = True):
         super().__init__(timeout=None)
         container = discord.ui.Container()
@@ -4173,7 +4170,6 @@ async def close_ticket(channel: discord.TextChannel, closer: discord.Member):
     save_config(config)
     guild = channel.guild
 
-    # ---- transcript ----
     lines = [
         f"Ticket #{data.get('number', '?')} - {channel.name}",
         f"Owner ID: {data['user_id']}",
@@ -4358,7 +4354,424 @@ async def ticket_close_cmd(interaction: discord.Interaction):
     )
 
 
-tree.add_command(ticket_group)
+tree.add_command(ticket_group, guild=discord.Object(id=GUILD_ID))
+
+
+EB_MAX_ELEMENTS = 23
+EB_MAX_CHARS = 3600
+EB_MAX_BUTTONS = 5
+
+
+def eb_default() -> dict:
+    return {
+        "title": "",
+        "description": "",
+        "footer": "",
+        "thumbnail": "",
+        "color": None,
+        "blocks": [],
+        "buttons": [],
+        "target": None
+    }
+
+
+def eb_clone(state: dict) -> dict:
+    return json.loads(json.dumps(state))
+
+
+def eb_url_ok(url: str) -> bool:
+    return url.startswith(("http://", "https://")) and " " not in url and len(url) < 2000
+
+
+def eb_has_content(state: dict) -> bool:
+    return bool(state["title"] or state["description"] or state["blocks"] or state["footer"])
+
+
+def eb_count(state: dict) -> int:
+    n = 1
+    head = bool(state["title"]) + bool(state["description"])
+    if head:
+        n += (head + 2) if state["thumbnail"] else head
+    for b in state["blocks"]:
+        n += 2 if b["t"] == "img" else 1
+    if state["footer"]:
+        n += 2
+    if state["buttons"]:
+        n += 1 + len(state["buttons"])
+    return n
+
+
+def eb_chars(state: dict) -> int:
+    total = len(state["title"]) + len(state["description"]) + len(state["footer"])
+    for b in state["blocks"]:
+        if b["t"] == "text":
+            total += len(b["v"])
+    return total
+
+
+def eb_valid(state: dict):
+    if eb_count(state) > EB_MAX_ELEMENTS:
+        return f"Element limit reached (max {EB_MAX_ELEMENTS}). Remove something first."
+    if eb_chars(state) > EB_MAX_CHARS:
+        return f"Too much text (max {EB_MAX_CHARS} characters in total)."
+    return None
+
+
+def eb_container(state: dict, preview: bool = False):
+    children = []
+    head = []
+    if state["title"]:
+        head.append(f"# {state['title']}")
+    if state["description"]:
+        head.append(state["description"])
+    if head:
+        if state["thumbnail"]:
+            children.append(
+                discord.ui.Section(
+                    *[discord.ui.TextDisplay(h) for h in head],
+                    accessory=discord.ui.Thumbnail(media=state["thumbnail"])
+                )
+            )
+        else:
+            for h in head:
+                children.append(discord.ui.TextDisplay(h))
+    for b in state["blocks"]:
+        if b["t"] == "text":
+            children.append(discord.ui.TextDisplay(b["v"]))
+        elif b["t"] == "sep":
+            children.append(discord.ui.Separator())
+        elif b["t"] == "img":
+            gallery = discord.ui.MediaGallery()
+            gallery.add_item(media=b["v"])
+            children.append(gallery)
+    if state["footer"]:
+        children.append(discord.ui.Separator())
+        children.append(discord.ui.TextDisplay(f"-# {state['footer']}"))
+    if not children:
+        if not preview:
+            return None
+        children.append(discord.ui.TextDisplay("*Empty. Use the buttons below to start building.*"))
+    kwargs = {}
+    if state["color"] is not None:
+        kwargs["accent_color"] = discord.Color(state["color"])
+    return discord.ui.Container(*children, **kwargs)
+
+
+def eb_button_row(state: dict):
+    if not state["buttons"]:
+        return None
+    return discord.ui.ActionRow(
+        *[discord.ui.Button(label=b["label"], url=b["url"], style=discord.ButtonStyle.link) for b in state["buttons"]]
+    )
+
+
+class EmbedOutputView(discord.ui.LayoutView):
+    def __init__(self, state: dict):
+        super().__init__(timeout=None)
+        container = eb_container(state)
+        if container:
+            self.add_item(container)
+        row = eb_button_row(state)
+        if row:
+            self.add_item(row)
+
+
+async def eb_apply(interaction: discord.Interaction, owner_id: int, new: dict):
+    problem = eb_valid(new)
+    if problem:
+        await interaction.response.send_message(view=tk_err(problem), ephemeral=True)
+        return
+    await interaction.response.edit_message(view=EmbedBuilderView(owner_id, new))
+
+
+class EbBtn(discord.ui.Button):
+    def __init__(self, builder, label, style, handler, emoji=None):
+        super().__init__(label=label, style=style, emoji=emoji)
+        self.builder = builder
+        self.handler = handler
+
+    async def callback(self, interaction: discord.Interaction):
+        await self.handler(interaction, self.builder)
+
+
+class EbChannelSelect(discord.ui.ChannelSelect):
+    def __init__(self, builder):
+        super().__init__(
+            placeholder="Send to a different channel (optional)",
+            channel_types=[discord.ChannelType.text, discord.ChannelType.news],
+            min_values=1,
+            max_values=1
+        )
+        self.builder = builder
+
+    async def callback(self, interaction: discord.Interaction):
+        new = eb_clone(self.builder.state)
+        new["target"] = self.values[0].id
+        await eb_apply(interaction, self.builder.owner_id, new)
+
+
+class EbMainModal(discord.ui.Modal, title="Title, Description & Footer"):
+    def __init__(self, owner_id: int, state: dict):
+        super().__init__()
+        self.owner_id = owner_id
+        self.state = state
+        self.f_title = discord.ui.TextInput(
+            label="Title (optional)", style=discord.TextStyle.short,
+            required=False, max_length=256, default=state["title"] or None
+        )
+        self.f_desc = discord.ui.TextInput(
+            label="Description (optional)", style=discord.TextStyle.paragraph,
+            required=False, max_length=2000, default=state["description"] or None
+        )
+        self.f_footer = discord.ui.TextInput(
+            label="Footer (optional)", style=discord.TextStyle.short,
+            required=False, max_length=200, default=state["footer"] or None
+        )
+        self.f_thumb = discord.ui.TextInput(
+            label="Thumbnail image URL (optional)", style=discord.TextStyle.short,
+            required=False, max_length=500, default=state["thumbnail"] or None
+        )
+        self.add_item(self.f_title)
+        self.add_item(self.f_desc)
+        self.add_item(self.f_footer)
+        self.add_item(self.f_thumb)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        thumb = self.f_thumb.value.strip()
+        if thumb and not eb_url_ok(thumb):
+            await interaction.response.send_message(view=tk_err("Thumbnail must be a valid http(s) image URL."), ephemeral=True)
+            return
+        new = eb_clone(self.state)
+        new["title"] = self.f_title.value.strip()
+        new["description"] = self.f_desc.value.strip()
+        new["footer"] = self.f_footer.value.strip()
+        new["thumbnail"] = thumb
+        await eb_apply(interaction, self.owner_id, new)
+
+
+class EbTextModal(discord.ui.Modal, title="Add Text Block"):
+    def __init__(self, owner_id: int, state: dict):
+        super().__init__()
+        self.owner_id = owner_id
+        self.state = state
+        self.f_text = discord.ui.TextInput(
+            label="Text (markdown supported)", style=discord.TextStyle.paragraph,
+            required=True, max_length=1000
+        )
+        self.add_item(self.f_text)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        new = eb_clone(self.state)
+        new["blocks"].append({"t": "text", "v": self.f_text.value.strip()})
+        await eb_apply(interaction, self.owner_id, new)
+
+
+class EbImageModal(discord.ui.Modal, title="Add Image"):
+    def __init__(self, owner_id: int, state: dict):
+        super().__init__()
+        self.owner_id = owner_id
+        self.state = state
+        self.f_url = discord.ui.TextInput(
+            label="Image URL", style=discord.TextStyle.short,
+            required=True, max_length=500
+        )
+        self.add_item(self.f_url)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        url = self.f_url.value.strip()
+        if not eb_url_ok(url):
+            await interaction.response.send_message(view=tk_err("Please enter a valid http(s) image URL."), ephemeral=True)
+            return
+        new = eb_clone(self.state)
+        new["blocks"].append({"t": "img", "v": url})
+        await eb_apply(interaction, self.owner_id, new)
+
+
+class EbLinkModal(discord.ui.Modal, title="Add Link Button"):
+    def __init__(self, owner_id: int, state: dict):
+        super().__init__()
+        self.owner_id = owner_id
+        self.state = state
+        self.f_label = discord.ui.TextInput(
+            label="Button label", style=discord.TextStyle.short,
+            required=True, max_length=80
+        )
+        self.f_url = discord.ui.TextInput(
+            label="Button link (URL)", style=discord.TextStyle.short,
+            required=True, max_length=500
+        )
+        self.add_item(self.f_label)
+        self.add_item(self.f_url)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        url = self.f_url.value.strip()
+        if not eb_url_ok(url):
+            await interaction.response.send_message(view=tk_err("Please enter a valid http(s) link."), ephemeral=True)
+            return
+        new = eb_clone(self.state)
+        new["buttons"].append({"label": self.f_label.value.strip(), "url": url})
+        await eb_apply(interaction, self.owner_id, new)
+
+
+class EbColorModal(discord.ui.Modal, title="Accent Color"):
+    def __init__(self, owner_id: int, state: dict):
+        super().__init__()
+        self.owner_id = owner_id
+        self.state = state
+        current = f"#{state['color']:06X}" if state["color"] is not None else None
+        self.f_hex = discord.ui.TextInput(
+            label="Hex color (leave empty for no color)", style=discord.TextStyle.short,
+            required=False, max_length=7, placeholder="#5865F2", default=current
+        )
+        self.add_item(self.f_hex)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        raw = self.f_hex.value.strip().lstrip("#")
+        new = eb_clone(self.state)
+        if not raw:
+            new["color"] = None
+        else:
+            if not re.fullmatch(r"[0-9a-fA-F]{6}", raw):
+                await interaction.response.send_message(view=tk_err("Invalid hex color. Example: `#5865F2`"), ephemeral=True)
+                return
+            new["color"] = int(raw, 16)
+        await eb_apply(interaction, self.owner_id, new)
+
+
+async def eb_h_main(interaction, builder):
+    await interaction.response.send_modal(EbMainModal(builder.owner_id, builder.state))
+
+
+async def eb_h_text(interaction, builder):
+    await interaction.response.send_modal(EbTextModal(builder.owner_id, builder.state))
+
+
+async def eb_h_image(interaction, builder):
+    await interaction.response.send_modal(EbImageModal(builder.owner_id, builder.state))
+
+
+async def eb_h_link(interaction, builder):
+    if len(builder.state["buttons"]) >= EB_MAX_BUTTONS:
+        await interaction.response.send_message(view=tk_err(f"Maximum of {EB_MAX_BUTTONS} buttons."), ephemeral=True)
+        return
+    await interaction.response.send_modal(EbLinkModal(builder.owner_id, builder.state))
+
+
+async def eb_h_color(interaction, builder):
+    await interaction.response.send_modal(EbColorModal(builder.owner_id, builder.state))
+
+
+async def eb_h_sep(interaction, builder):
+    new = eb_clone(builder.state)
+    new["blocks"].append({"t": "sep"})
+    await eb_apply(interaction, builder.owner_id, new)
+
+
+async def eb_h_undo(interaction, builder):
+    if not builder.state["blocks"]:
+        await interaction.response.send_message(view=tk_err("There are no blocks to remove."), ephemeral=True)
+        return
+    new = eb_clone(builder.state)
+    new["blocks"].pop()
+    await eb_apply(interaction, builder.owner_id, new)
+
+
+async def eb_h_unlink(interaction, builder):
+    if not builder.state["buttons"]:
+        await interaction.response.send_message(view=tk_err("There are no buttons to remove."), ephemeral=True)
+        return
+    new = eb_clone(builder.state)
+    new["buttons"].pop()
+    await eb_apply(interaction, builder.owner_id, new)
+
+
+async def eb_h_reset(interaction, builder):
+    await eb_apply(interaction, builder.owner_id, eb_default())
+
+
+async def eb_h_cancel(interaction, builder):
+    builder.stop()
+    await interaction.response.edit_message(view=tk_ok("Embed Builder Closed", "Nothing was sent."))
+
+
+async def eb_h_send(interaction, builder):
+    state = builder.state
+    if not eb_has_content(state):
+        await interaction.response.send_message(view=tk_err("Add a title, description, or a block first."), ephemeral=True)
+        return
+    target = interaction.channel
+    if state.get("target"):
+        chosen = interaction.guild.get_channel(state["target"])
+        if chosen:
+            target = chosen
+    if not target.permissions_for(interaction.guild.me).send_messages:
+        await interaction.response.send_message(view=tk_err(f"I can't send messages in {target.mention}."), ephemeral=True)
+        return
+    try:
+        await target.send(
+            view=EmbedOutputView(state),
+            allowed_mentions=discord.AllowedMentions(everyone=False, roles=True, users=True)
+        )
+    except Exception as e:
+        await interaction.response.send_message(view=tk_err(f"Could not send the embed: `{e}`"), ephemeral=True)
+        return
+    builder.stop()
+    await interaction.response.edit_message(view=tk_ok("Embed Sent", f"Sent to {target.mention}."))
+
+
+class EmbedBuilderView(discord.ui.LayoutView):
+    def __init__(self, owner_id: int, state: dict = None):
+        super().__init__(timeout=900)
+        self.owner_id = owner_id
+        self.state = state if state is not None else eb_default()
+        st = self.state
+        target = f"<#{st['target']}>" if st.get("target") else "current channel"
+        self.add_item(
+            discord.ui.TextDisplay(
+                f"## Embed Builder\nSending to: {target} • Elements: {eb_count(st) if eb_has_content(st) else 0}/{EB_MAX_ELEMENTS}"
+            )
+        )
+        self.add_item(eb_container(st, preview=True))
+        row = eb_button_row(st)
+        if row:
+            self.add_item(row)
+        P = discord.ButtonStyle.primary
+        S = discord.ButtonStyle.secondary
+        G = discord.ButtonStyle.success
+        R = discord.ButtonStyle.danger
+        self.add_item(discord.ui.ActionRow(
+            EbBtn(self, "Title / Description", P, eb_h_main, "📝"),
+            EbBtn(self, "Add Text", P, eb_h_text, "➕"),
+            EbBtn(self, "Add Image", P, eb_h_image, "🖼️"),
+            EbBtn(self, "Add Separator", S, eb_h_sep, "➖"),
+        ))
+        self.add_item(discord.ui.ActionRow(
+            EbBtn(self, "Color", S, eb_h_color, "🎨"),
+            EbBtn(self, "Add Button", S, eb_h_link, "🔗"),
+            EbBtn(self, "Undo Block", S, eb_h_undo, "↩️"),
+            EbBtn(self, "Remove Button", S, eb_h_unlink, "🗑️"),
+            EbBtn(self, "Reset", R, eb_h_reset),
+        ))
+        self.add_item(discord.ui.ActionRow(EbChannelSelect(self)))
+        self.add_item(discord.ui.ActionRow(
+            EbBtn(self, "Send", G, eb_h_send, "📨"),
+            EbBtn(self, "Cancel", R, eb_h_cancel),
+        ))
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.owner_id:
+            await interaction.response.send_message(view=tk_err("This builder isn't yours."), ephemeral=True)
+            return False
+        return True
+
+
+@tree.command(name="embed", description="Build and send a Components V2 embed", guild=discord.Object(id=GUILD_ID))
+@discord.app_commands.default_permissions(manage_messages=True)
+async def embed_builder(interaction: discord.Interaction):
+    if not interaction.user.guild_permissions.manage_messages:
+        await interaction.response.send_message(view=tk_err("You need Manage Messages to use this."), ephemeral=True)
+        return
+    await interaction.response.send_message(view=EmbedBuilderView(interaction.user.id), ephemeral=True)
 
 
 @bot.event
