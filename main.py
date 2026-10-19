@@ -3888,6 +3888,27 @@ def tk_safe_name(name: str) -> str:
     return (cleaned or "user")[:20]
 
 
+class TicketInfoView(discord.ui.LayoutView):
+    """Plain container with no accent color."""
+    def __init__(self, title: str, body: str, color=None):
+        super().__init__(timeout=None)
+        self.add_item(
+            discord.ui.Container(
+                discord.ui.TextDisplay(f"# {title}"),
+                discord.ui.Separator(),
+                discord.ui.TextDisplay(body)
+            )
+        )
+
+
+def tk_err(msg: str) -> discord.ui.LayoutView:
+    return TicketInfoView("Failed!", msg)
+
+
+def tk_ok(title: str, body: str) -> discord.ui.LayoutView:
+    return TicketInfoView(title, body)
+
+
 class OpenTicketButton(discord.ui.Button):
     def __init__(self):
         super().__init__(
@@ -3900,7 +3921,7 @@ class OpenTicketButton(discord.ui.Button):
         existing = tk_find_open(interaction.guild, interaction.user.id)
         if existing:
             await interaction.response.send_message(
-                view=err(f"You already have an open ticket: {existing.mention}"),
+                view=tk_err(f"You already have an open ticket: {existing.mention}"),
                 ephemeral=True
             )
             return
@@ -3921,19 +3942,19 @@ class TicketClaimButton(discord.ui.Button):
         t = tk_cfg()
         data = t["open"].get(str(interaction.channel.id))
         if not data:
-            await interaction.response.send_message(view=err("This is not an active ticket."), ephemeral=True)
+            await interaction.response.send_message(view=tk_err("This is not an active ticket."), ephemeral=True)
             return
         if not tk_is_staff(interaction.user):
-            await interaction.response.send_message(view=err("Only staff can claim tickets."), ephemeral=True)
+            await interaction.response.send_message(view=tk_err("Only staff can claim tickets."), ephemeral=True)
             return
         if data.get("claimed_by"):
-            await interaction.response.send_message(view=err(f"Already claimed by <@{data['claimed_by']}>."), ephemeral=True)
+            await interaction.response.send_message(view=tk_err(f"Already claimed by <@{data['claimed_by']}>."), ephemeral=True)
             return
         data["claimed_by"] = interaction.user.id
         save_config(config)
         await interaction.response.edit_message(view=TicketWelcomeView(data))
         await interaction.channel.send(
-            view=ok("🙋 Ticket Claimed", f"{interaction.user.mention} will be assisting <@{data['user_id']}>."),
+            view=tk_ok("🙋 Ticket Claimed", f"{interaction.user.mention} will be assisting <@{data['user_id']}>."),
             allowed_mentions=discord.AllowedMentions.none()
         )
 
@@ -3950,10 +3971,10 @@ class TicketCloseButton(discord.ui.Button):
     async def callback(self, interaction: discord.Interaction):
         data = tk_cfg()["open"].get(str(interaction.channel.id))
         if not data:
-            await interaction.response.send_message(view=err("This is not an active ticket."), ephemeral=True)
+            await interaction.response.send_message(view=tk_err("This is not an active ticket."), ephemeral=True)
             return
         if not (tk_is_staff(interaction.user) or interaction.user.id == data["user_id"]):
-            await interaction.response.send_message(view=err("Only staff or the ticket owner can close this."), ephemeral=True)
+            await interaction.response.send_message(view=tk_err("Only staff or the ticket owner can close this."), ephemeral=True)
             return
         await interaction.response.send_message(
             "Are you sure you want to close this ticket?",
@@ -3993,7 +4014,7 @@ class TicketPanelView(discord.ui.LayoutView):
     """Banner + text inside the container, Open Ticket button OUTSIDE it."""
     def __init__(self, with_banner: bool = True):
         super().__init__(timeout=None)
-        container = discord.ui.Container(accent_color=discord.Color.blurple())
+        container = discord.ui.Container()
         if with_banner:
             gallery = discord.ui.MediaGallery()
             gallery.add_item(media=f"attachment://{TICKET_BANNER_NAME}")
@@ -4026,7 +4047,6 @@ class TicketWelcomeView(discord.ui.LayoutView):
                 discord.ui.Separator(),
                 discord.ui.TextDisplay("A staff member will be with you shortly. Please wait patiently."),
                 discord.ui.ActionRow(TicketClaimButton(data.get("claimed_by")), TicketCloseButton()),
-                accent_color=discord.Color.blurple()
             )
         )
 
@@ -4060,7 +4080,7 @@ class TicketModal(discord.ui.Modal, title="Support Ticket"):
 
         existing = tk_find_open(guild, user.id)
         if existing:
-            await interaction.followup.send(view=err(f"You already have an open ticket: {existing.mention}"), ephemeral=True)
+            await interaction.followup.send(view=tk_err(f"You already have an open ticket: {existing.mention}"), ephemeral=True)
             return
 
         category = guild.get_channel(t["category_id"]) if t.get("category_id") else None
@@ -4096,10 +4116,10 @@ class TicketModal(discord.ui.Modal, title="Support Ticket"):
                 reason=f"Ticket opened by {user}"
             )
         except discord.Forbidden:
-            await interaction.followup.send(view=err("I don't have permission to create channels (need Manage Channels)."), ephemeral=True)
+            await interaction.followup.send(view=tk_err("I don't have permission to create channels (need Manage Channels)."), ephemeral=True)
             return
         except Exception as e:
-            await interaction.followup.send(view=err(f"Could not create the ticket: `{e}`"), ephemeral=True)
+            await interaction.followup.send(view=tk_err(f"Could not create the ticket: `{e}`"), ephemeral=True)
             return
 
         data = {
@@ -4121,12 +4141,12 @@ class TicketModal(discord.ui.Modal, title="Support Ticket"):
         except Exception:
             pass
         await channel.send(view=TicketWelcomeView(data))
-        await interaction.followup.send(view=ok("🎫 Ticket Created", f"Your ticket is ready: {channel.mention}"), ephemeral=True)
+        await interaction.followup.send(view=tk_ok("🎫 Ticket Created", f"Your ticket is ready: {channel.mention}"), ephemeral=True)
 
         log_ch = guild.get_channel(t["log_id"]) if t.get("log_id") else None
         if log_ch:
             try:
-                await log_ch.send(view=LogView(
+                await log_ch.send(view=TicketInfoView(
                     "🎫 Ticket Opened",
                     f"**User:** {user.mention} (`{user.id}`)\n**Channel:** {channel.mention}\n**Issue:** {data['issue'][:300]}",
                     discord.Color.green()
@@ -4138,9 +4158,9 @@ class TicketModal(discord.ui.Modal, title="Support Ticket"):
         print(f"Ticket modal error: {error}")
         try:
             if interaction.response.is_done():
-                await interaction.followup.send(view=err("Something went wrong while creating your ticket."), ephemeral=True)
+                await interaction.followup.send(view=tk_err("Something went wrong while creating your ticket."), ephemeral=True)
             else:
-                await interaction.response.send_message(view=err("Something went wrong while creating your ticket."), ephemeral=True)
+                await interaction.response.send_message(view=tk_err("Something went wrong while creating your ticket."), ephemeral=True)
         except Exception:
             pass
 
@@ -4181,7 +4201,7 @@ async def close_ticket(channel: discord.TextChannel, closer: discord.Member):
     if log_ch:
         try:
             await log_ch.send(
-                view=LogView(
+                view=TicketInfoView(
                     "🔒 Ticket Closed",
                     f"**Ticket:** #{data.get('number', '?')} (`{channel.name}`)\n"
                     f"**Owner:** <@{data['user_id']}>\n"
@@ -4205,7 +4225,7 @@ async def close_ticket(channel: discord.TextChannel, closer: discord.Member):
             pass
 
     try:
-        await channel.send(view=InfoView("🔒 Ticket Closed", f"Closed by {closer.mention}. Deleting in 5 seconds...", discord.Color.red()))
+        await channel.send(view=TicketInfoView("🔒 Ticket Closed", f"Closed by {closer.mention}. Deleting in 5 seconds...", discord.Color.red()))
     except Exception:
         pass
     await asyncio.sleep(5)
@@ -4245,7 +4265,7 @@ async def ticket_setup(
     log: discord.TextChannel = None
 ):
     if not os.path.exists(TICKET_BANNER):
-        await interaction.response.send_message(view=err(f"`{TICKET_BANNER}` is missing next to main.py."), ephemeral=True)
+        await interaction.response.send_message(view=tk_err(f"`{TICKET_BANNER}` is missing next to main.py."), ephemeral=True)
         return
     await interaction.response.defer(ephemeral=True)
     t = tk_cfg()
@@ -4260,10 +4280,10 @@ async def ticket_setup(
             file=discord.File(TICKET_BANNER, filename=TICKET_BANNER_NAME)
         )
     except discord.Forbidden:
-        await interaction.followup.send(view=err(f"I can't send messages in {channel.mention}."), ephemeral=True)
+        await interaction.followup.send(view=tk_err(f"I can't send messages in {channel.mention}."), ephemeral=True)
         return
     await interaction.followup.send(
-        view=ok(
+        view=tk_ok(
             "Ticket Setup Complete",
             f"**Panel:** {channel.mention}\n**Category:** {category.mention}\n"
             f"**Staff role:** {staff_role.mention}\n**Logs:** {log.mention if log else 'None'}"
@@ -4280,15 +4300,15 @@ def tk_ticket_only(interaction: discord.Interaction):
 @discord.app_commands.describe(member="Member to add")
 async def ticket_add(interaction: discord.Interaction, member: discord.Member):
     if not tk_ticket_only(interaction):
-        await interaction.response.send_message(view=err("Use this inside a ticket channel."), ephemeral=True)
+        await interaction.response.send_message(view=tk_err("Use this inside a ticket channel."), ephemeral=True)
         return
     if not tk_is_staff(interaction.user):
-        await interaction.response.send_message(view=err("Only staff can do that."), ephemeral=True)
+        await interaction.response.send_message(view=tk_err("Only staff can do that."), ephemeral=True)
         return
     await interaction.channel.set_permissions(
         member, view_channel=True, send_messages=True, read_message_history=True, attach_files=True
     )
-    await interaction.response.send_message(view=ok("Member Added", f"{member.mention} was added to this ticket."))
+    await interaction.response.send_message(view=tk_ok("Member Added", f"{member.mention} was added to this ticket."))
 
 
 @ticket_group.command(name="remove", description="Remove a member from this ticket")
@@ -4296,29 +4316,29 @@ async def ticket_add(interaction: discord.Interaction, member: discord.Member):
 async def ticket_remove(interaction: discord.Interaction, member: discord.Member):
     data = tk_ticket_only(interaction)
     if not data:
-        await interaction.response.send_message(view=err("Use this inside a ticket channel."), ephemeral=True)
+        await interaction.response.send_message(view=tk_err("Use this inside a ticket channel."), ephemeral=True)
         return
     if not tk_is_staff(interaction.user):
-        await interaction.response.send_message(view=err("Only staff can do that."), ephemeral=True)
+        await interaction.response.send_message(view=tk_err("Only staff can do that."), ephemeral=True)
         return
     if member.id == data["user_id"]:
-        await interaction.response.send_message(view=err("You can't remove the ticket owner."), ephemeral=True)
+        await interaction.response.send_message(view=tk_err("You can't remove the ticket owner."), ephemeral=True)
         return
     await interaction.channel.set_permissions(member, overwrite=None)
-    await interaction.response.send_message(view=ok("Member Removed", f"{member.mention} was removed from this ticket."))
+    await interaction.response.send_message(view=tk_ok("Member Removed", f"{member.mention} was removed from this ticket."))
 
 
 @ticket_group.command(name="rename", description="Rename this ticket channel")
 @discord.app_commands.describe(name="New channel name")
 async def ticket_rename(interaction: discord.Interaction, name: str):
     if not tk_ticket_only(interaction):
-        await interaction.response.send_message(view=err("Use this inside a ticket channel."), ephemeral=True)
+        await interaction.response.send_message(view=tk_err("Use this inside a ticket channel."), ephemeral=True)
         return
     if not tk_is_staff(interaction.user):
-        await interaction.response.send_message(view=err("Only staff can do that."), ephemeral=True)
+        await interaction.response.send_message(view=tk_err("Only staff can do that."), ephemeral=True)
         return
     new = tk_safe_name(name)
-    await interaction.response.send_message(view=ok("Ticket Renamed", f"Renamed to `{new}`."))
+    await interaction.response.send_message(view=tk_ok("Ticket Renamed", f"Renamed to `{new}`."))
     await interaction.channel.edit(name=new)
 
 
@@ -4326,10 +4346,10 @@ async def ticket_rename(interaction: discord.Interaction, name: str):
 async def ticket_close_cmd(interaction: discord.Interaction):
     data = tk_ticket_only(interaction)
     if not data:
-        await interaction.response.send_message(view=err("Use this inside a ticket channel."), ephemeral=True)
+        await interaction.response.send_message(view=tk_err("Use this inside a ticket channel."), ephemeral=True)
         return
     if not (tk_is_staff(interaction.user) or interaction.user.id == data["user_id"]):
-        await interaction.response.send_message(view=err("Only staff or the ticket owner can close this."), ephemeral=True)
+        await interaction.response.send_message(view=tk_err("Only staff or the ticket owner can close this."), ephemeral=True)
         return
     await interaction.response.send_message(
         "Are you sure you want to close this ticket?",
