@@ -269,90 +269,110 @@ class GiveawayPersistentView(discord.ui.View):
         self.add_item(GiveawayEnterButton())
 
 
+HELP_PAGES = [
+    (
+        "Utility",
+        "`.ping`\n"
+        "`.say <message>`\n"
+        "`.embed`\n"
+        "`.afk [reason]`\n"
+        "`.snipe`\n"
+        "`.avatar [@user]`\n"
+        "`.bypass <link>`\n"
+        "`.steal <emoji>`\n"
+        "`.help`"
+    ),
+    (
+        "Moderation",
+        "**Moderation**\n"
+        "`.kick @user [reason]`\n"
+        "`.ban @user [reason]`\n"
+        "`.unban <userID>`\n"
+        "`.timeout @user <minutes> [reason]`\n"
+        "`.untimeout @user`\n"
+        "`.purge <amount>`\n\n"
+        "**Warnings**\n"
+        "`.warn @user [reason]`\n"
+        "`.warns [@user]`\n"
+        "`.clearwarns @user`\n\n"
+        "**Channels**\n"
+        "`.lock [#channel]`\n"
+        "`.unlock [#channel]`\n"
+        "`.slowmode <seconds> [#channel]`"
+    ),
+    (
+        "Economy",
+        "`.balance [@user]` `.daily` `.weekly` `.work` `.beg` `.crime`\n"
+        "`.rob @user` `.fish` `.mine` `.coinflip <bet> <h/t>` `.scatter <bet>`\n"
+        "`.deposit <amt|all>` `.withdraw <amt|all>` `.give @user <amt>`\n"
+        "`.shop` `.buy <item> [qty]` `.sell <item> [qty]` `.inventory`\n"
+        "`.leaderboard`\n\n"
+        "**Admin**\n"
+        "`.addcoins` `.removecoins` `.setcoins` `.resetcoins`"
+    ),
+    (
+        "Security & Logs",
+        "**Security (Admin)**\n"
+        "`.security` `.security setup [#logchannel]` `.panic <on|off>`\n"
+        "`.lockdown` `.unlockdown`\n"
+        "`.antiraid` `.antinuke` `.antispam` `.antilink` `.antimention` `<on|off>`\n"
+        "`.whitelist <add|remove|list> [@user]` (owner only)\n"
+        "Fine-tune with `/security <module>`\n\n"
+        "**Logs (Admin)**\n"
+        "`.logs` `.setlog <category|all> #channel` `.dellog <category|all>`\n"
+        "Categories: `mod` `message` `member` `voice` `server` `bot` `security`"
+    ),
+    (
+        "Giveaway, Ticket & Auto Responder",
+        "**Giveaways**\n"
+        "`.gstart <duration> <winners> <prize>`\n"
+        "`.gend <message_id>` `.greroll <message_id>`\n\n"
+        "**Tickets**\n"
+        "`/ticket setup` `/ticket add` `/ticket remove` `/ticket rename` `/ticket close`\n\n"
+        "**Auto Responder**\n"
+        "`/autoresponder add|edit|remove|list|clear`\n"
+        "`.ar add <trigger> | <reply>` `.ar add <trigger>` `.ar list`\n"
+        "Variables: `{user}` `{username}` `{server}` `{channel}` `{membercount}`"
+    ),
+]
+
+
+class HelpNavButton(discord.ui.Button):
+    def __init__(self, label: str, target: int, view_ref, disabled: bool = False):
+        super().__init__(label=label, style=discord.ButtonStyle.secondary, disabled=disabled)
+        self.target = target
+        self.view_ref = view_ref
+
+    async def callback(self, interaction: discord.Interaction):
+        owner = self.view_ref.author_id
+        if owner and interaction.user.id != owner:
+            await interaction.response.send_message("Only the person who ran this command can use these buttons.", ephemeral=True)
+            return
+        await interaction.response.edit_message(view=HelpView(owner, self.target))
+
+
 class HelpView(discord.ui.LayoutView):
-    def __init__(self):
-        super().__init__(timeout=None)
+    def __init__(self, author_id: int = None, page: int = 0):
+        super().__init__(timeout=300)
+        self.author_id = author_id
+        self.page = max(0, min(page, len(HELP_PAGES) - 1))
+        total = len(HELP_PAGES)
+        name, body = HELP_PAGES[self.page]
         self.add_item(
             discord.ui.Container(
-                discord.ui.TextDisplay("# Help — Commands"),
+                discord.ui.TextDisplay(f"# Help — {name}"),
                 discord.ui.Separator(),
-                discord.ui.TextDisplay(
-                    "You can use either prefix commands (`.command`) or slash commands (`/command`)"
-                ),
+                discord.ui.TextDisplay(body),
                 discord.ui.Separator(),
-                discord.ui.TextDisplay(
-                    "**Moderation Commands**\n"
-                    "`.kick @user [reason]`\n"
-                    "`.ban @user [reason]`\n"
-                    "`.unban <userID>`\n"
-                    "`.timeout @user <minutes> [reason]`\n"
-                    "`.untimeout @user`\n"
-                    "`.purge <amount>`"
-                ),
-                discord.ui.Separator(),
-                discord.ui.TextDisplay(
-                    "**Warning Commands**\n"
-                    "`.warn @user [reason]`\n"
-                    "`.warns [@user]`\n"
-                    "`.clearwarns @user`"
-                ),
-                discord.ui.Separator(),
-                discord.ui.TextDisplay(
-                    "**Channel Commands**\n"
-                    "`.lock [#channel]`\n"
-                    "`.unlock [#channel]`\n"
-                    "`.slowmode <seconds> [#channel]`"
-                ),
-                discord.ui.Separator(),
-                discord.ui.TextDisplay(
-                    "**Giveaway Commands**\n"
-                    "`.gstart <duration> <winners> <prize>`\n"
-                    "`.gend <message_id>`\n"
-                    "`.greroll <message_id>`"
-                ),
-                discord.ui.Separator(),
-                discord.ui.TextDisplay(
-                    "**Economy Commands**\n"
-                    "`.balance [@user]` `.daily` `.weekly` `.work` `.beg` `.crime`\n"
-                    "`.rob @user` `.fish` `.mine` `.coinflip <bet> <h/t>` `.scatter <bet>`\n"
-                    "`.deposit <amt|all>` `.withdraw <amt|all>` `.give @user <amt>`\n"
-                    "`.shop` `.buy <item> [qty]` `.sell <item> [qty]` `.inventory`\n"
-                    "`.leaderboard`\n"
-                    "Admin: `.addcoins` `.removecoins` `.setcoins` `.resetcoins`"
-                ),
-                discord.ui.Separator(),
-                discord.ui.TextDisplay(
-                    "**Security Commands (Admin)**\n"
-                    "`.security` `.security setup [#logchannel]` `.panic <on|off>`\n"
-                    "`.lockdown` `.unlockdown`\n"
-                    "`.antiraid` `.antinuke` `.antispam` `.antilink` `.antimention` `<on|off>`\n"
-                    "`.whitelist <add|remove|list> [@user]` (owner only)\n"
-                    "Fine-tune with `/security <module>`"
-                ),
-                discord.ui.Separator(),
-                discord.ui.TextDisplay(
-                    "**Log Commands (Admin)**\n"
-                    "`.logs` `.setlog <category|all> #channel` `.dellog <category|all>`\n"
-                    "Categories: `mod` `message` `member` `voice` `server` `bot` `security`"
-                ),
-                discord.ui.Separator(),
-                discord.ui.TextDisplay(
-                    "**Utility Commands**\n"
-                    "`.ping`\n"
-                    "`.say <message>`\n"
-                    "`.embed`\n"
-                    "`.afk [reason]`\n"
-                    "`.snipe`\n"
-                    "`.avatar [@user]`\n"
-                    "`.bypass <link>`\n"
-                    "`.steal <emoji>`\n"
-                    "`.help`\n\n"
-                    "**Ticket Commands**\n"
-                    "`/ticket setup` `/ticket add` `/ticket remove` `/ticket rename` `/ticket close`"
-                ),
-                discord.ui.Separator(),
-                discord.ui.TextDisplay("Prefix: `.` | All commands also available as `/command`"),
-                accent_color=discord.Color.blurple()
+                discord.ui.TextDisplay(f"-# Prefix: `.` | Also available as `/command` | Page {self.page + 1}/{total}"),
+            )
+        )
+        indicator = discord.ui.Button(label=f"{self.page + 1} / {total}", style=discord.ButtonStyle.primary, disabled=True)
+        self.add_item(
+            discord.ui.ActionRow(
+                HelpNavButton("<< Back", self.page - 1, self, disabled=self.page == 0),
+                indicator,
+                HelpNavButton("Next >>", self.page + 1, self, disabled=self.page >= total - 1),
             )
         )
 
@@ -2355,7 +2375,7 @@ GUILD_OBJ = discord.Object(id=GUILD_ID)
 
 @tree.command(name="help", description="Show all commands", guild=discord.Object(id=GUILD_ID))
 async def help_cmd(interaction: discord.Interaction):
-    await interaction.response.send_message(view=HelpView())
+    await interaction.response.send_message(view=HelpView(interaction.user.id))
 
 
 @tree.command(name="ping", description="Check bot latency", guild=discord.Object(id=GUILD_ID))
@@ -3136,6 +3156,8 @@ async def on_message(message):
         return
 
     if not message.content.startswith(PREFIX):
+        if message.guild and await ar_check(message):
+            return
         bypass_channel_id = config.get("channel_id")
         if (
             bypass_channel_id
@@ -3167,7 +3189,7 @@ async def on_message(message):
         return
 
     if cmd == "help":
-        await message.channel.send(view=HelpView())
+        await message.channel.send(view=HelpView(message.author.id))
 
     elif cmd == "ping":
         latency = round(bot.latency * 1000)
@@ -3198,6 +3220,11 @@ async def on_message(message):
         if not message.author.guild_permissions.manage_messages:
             return
         await message.channel.send(view=EmbedBuilderView(message.author.id))
+
+    elif cmd in ("autoresponder", "ar"):
+        if not message.author.guild_permissions.manage_guild:
+            return
+        await ar_prefix(message)
 
     elif cmd == "kick":
         if not message.author.guild_permissions.kick_members:
@@ -4357,421 +4384,862 @@ async def ticket_close_cmd(interaction: discord.Interaction):
 tree.add_command(ticket_group, guild=discord.Object(id=GUILD_ID))
 
 
-EB_MAX_ELEMENTS = 23
+EB_COLORS = {
+    "none": None,
+    "blurple": discord.Colour.blurple(),
+    "red": discord.Colour.red(),
+    "green": discord.Colour.green(),
+    "blue": discord.Colour.blue(),
+    "orange": discord.Colour.orange(),
+    "dark_grey": discord.Colour.dark_grey(),
+    "white": discord.Colour(0xFFFFFF),
+}
+
+EB_COLOR_NAMES = {
+    "none": "None",
+    "blurple": "Blurple",
+    "red": "Red",
+    "green": "Green",
+    "blue": "Blue",
+    "orange": "Orange",
+    "dark_grey": "Dark Grey",
+    "white": "White",
+}
+
+EB_MAX_COMPONENTS = 20
+EB_MAX_TOTAL = 26
 EB_MAX_CHARS = 3600
-EB_MAX_BUTTONS = 5
 
 
-def eb_default() -> dict:
-    return {
-        "title": "",
-        "description": "",
-        "footer": "",
-        "thumbnail": "",
-        "color": None,
-        "blocks": [],
-        "buttons": [],
-        "target": None
-    }
+def eb_label(comp: dict, i: int) -> str:
+    t = comp["type"]
+    if t == "text":
+        p = comp["content"][:45].replace("\n", " ")
+        return f"{i + 1}. Text — {p}"
+    if t == "separator":
+        kind = "line" if comp.get("divider", True) else "spacer"
+        return f"{i + 1}. Separator ({comp.get('spacing', 'small')}, {kind})"
+    if t == "section":
+        p = comp["content"][:40].replace("\n", " ")
+        return f"{i + 1}. Section — {p}"
+    if t == "media_gallery":
+        n = len(comp["urls"])
+        return f"{i + 1}. Gallery ({n} image{'s' if n != 1 else ''})"
+    if t == "button_row":
+        labels = ", ".join(b["label"] for b in comp["buttons"][:3])
+        suffix = "..." if len(comp["buttons"]) > 3 else ""
+        return f"{i + 1}. Buttons — {labels}{suffix}"
+    return f"{i + 1}. Unknown"
 
 
-def eb_clone(state: dict) -> dict:
-    return json.loads(json.dumps(state))
+def eb_cost(comp: dict) -> int:
+    t = comp["type"]
+    if t == "section":
+        return 3 if comp.get("thumbnail_url") else 1
+    if t == "media_gallery":
+        return 1 + len(comp["urls"])
+    if t == "button_row":
+        return 1 + len(comp["buttons"])
+    return 1
 
 
-def eb_url_ok(url: str) -> bool:
-    return url.startswith(("http://", "https://")) and " " not in url and len(url) < 2000
+def eb_chars(comp: dict) -> int:
+    t = comp["type"]
+    if t in ("text", "section"):
+        return len(comp["content"])
+    return 0
 
 
-def eb_has_content(state: dict) -> bool:
-    return bool(state["title"] or state["description"] or state["blocks"] or state["footer"])
-
-
-def eb_count(state: dict) -> int:
-    n = 1
-    head = bool(state["title"]) + bool(state["description"])
-    if head:
-        n += (head + 2) if state["thumbnail"] else head
-    for b in state["blocks"]:
-        n += 2 if b["t"] == "img" else 1
-    if state["footer"]:
-        n += 2
-    if state["buttons"]:
-        n += 1 + len(state["buttons"])
-    return n
-
-
-def eb_chars(state: dict) -> int:
-    total = len(state["title"]) + len(state["description"]) + len(state["footer"])
-    for b in state["blocks"]:
-        if b["t"] == "text":
-            total += len(b["v"])
-    return total
-
-
-def eb_valid(state: dict):
-    if eb_count(state) > EB_MAX_ELEMENTS:
-        return f"Element limit reached (max {EB_MAX_ELEMENTS}). Remove something first."
-    if eb_chars(state) > EB_MAX_CHARS:
-        return f"Too much text (max {EB_MAX_CHARS} characters in total)."
+def eb_fit(data: list):
+    if len(data) > EB_MAX_COMPONENTS:
+        return f"Maximum of {EB_MAX_COMPONENTS} components reached."
+    if 1 + sum(eb_cost(c) for c in data) > EB_MAX_TOTAL:
+        return "Discord's component limit would be exceeded. Remove something or use fewer images/buttons."
+    if sum(eb_chars(c) for c in data) > EB_MAX_CHARS:
+        return f"Too much text. The total is limited to {EB_MAX_CHARS} characters."
     return None
 
 
-def eb_container(state: dict, preview: bool = False):
-    children = []
-    head = []
-    if state["title"]:
-        head.append(f"# {state['title']}")
-    if state["description"]:
-        head.append(state["description"])
-    if head:
-        if state["thumbnail"]:
-            children.append(
-                discord.ui.Section(
-                    *[discord.ui.TextDisplay(h) for h in head],
-                    accessory=discord.ui.Thumbnail(media=state["thumbnail"])
-                )
-            )
+def eb_render_into(container: discord.ui.Container, comp: dict, transform=None) -> None:
+    t = comp["type"]
+    tf = transform or (lambda s: s)
+    if t == "text":
+        container.add_item(discord.ui.TextDisplay(tf(comp["content"])))
+    elif t == "separator":
+        sp = discord.SeparatorSpacing.large if comp.get("spacing") == "large" else discord.SeparatorSpacing.small
+        container.add_item(discord.ui.Separator(visible=comp.get("divider", True), spacing=sp))
+    elif t == "section":
+        url = comp.get("thumbnail_url")
+        if url:
+            section = discord.ui.Section(accessory=discord.ui.Thumbnail(media=url))
+            section.add_item(discord.ui.TextDisplay(tf(comp["content"])))
+            container.add_item(section)
         else:
-            for h in head:
-                children.append(discord.ui.TextDisplay(h))
-    for b in state["blocks"]:
-        if b["t"] == "text":
-            children.append(discord.ui.TextDisplay(b["v"]))
-        elif b["t"] == "sep":
-            children.append(discord.ui.Separator())
-        elif b["t"] == "img":
+            container.add_item(discord.ui.TextDisplay(tf(comp["content"])))
+    elif t == "media_gallery":
+        if comp["urls"]:
             gallery = discord.ui.MediaGallery()
-            gallery.add_item(media=b["v"])
-            children.append(gallery)
-    if state["footer"]:
-        children.append(discord.ui.Separator())
-        children.append(discord.ui.TextDisplay(f"-# {state['footer']}"))
-    if not children:
-        if not preview:
-            return None
-        children.append(discord.ui.TextDisplay("*Empty. Use the buttons below to start building.*"))
-    kwargs = {}
-    if state["color"] is not None:
-        kwargs["accent_color"] = discord.Color(state["color"])
-    return discord.ui.Container(*children, **kwargs)
+            for u in comp["urls"]:
+                gallery.add_item(media=u)
+            container.add_item(gallery)
+    elif t == "button_row":
+        if comp["buttons"]:
+            row = discord.ui.ActionRow(*[
+                discord.ui.Button(label=b["label"], style=discord.ButtonStyle.link, url=b["url"])
+                for b in comp["buttons"][:5]
+            ])
+            container.add_item(row)
 
 
-def eb_button_row(state: dict):
-    if not state["buttons"]:
-        return None
-    return discord.ui.ActionRow(
-        *[discord.ui.Button(label=b["label"], url=b["url"], style=discord.ButtonStyle.link) for b in state["buttons"]]
-    )
+def eb_make_view(data: list, color_key: str, transform=None) -> discord.ui.LayoutView:
+    view = discord.ui.LayoutView(timeout=None)
+    container = discord.ui.Container(accent_color=EB_COLORS.get(color_key))
+    if not data:
+        container.add_item(discord.ui.TextDisplay("*(empty container)*"))
+    else:
+        for comp in data:
+            eb_render_into(container, comp, transform)
+    view.add_item(container)
+    return view
 
 
-class EmbedOutputView(discord.ui.LayoutView):
-    def __init__(self, state: dict):
-        super().__init__(timeout=None)
-        container = eb_container(state)
-        if container:
-            self.add_item(container)
-        row = eb_button_row(state)
-        if row:
-            self.add_item(row)
-
-
-async def eb_apply(interaction: discord.Interaction, owner_id: int, new: dict):
-    problem = eb_valid(new)
-    if problem:
-        await interaction.response.send_message(view=tk_err(problem), ephemeral=True)
-        return
-    await interaction.response.edit_message(view=EmbedBuilderView(owner_id, new))
-
-
-class EbBtn(discord.ui.Button):
-    def __init__(self, builder, label, style, handler, emoji=None):
-        super().__init__(label=label, style=style, emoji=emoji)
-        self.builder = builder
-        self.handler = handler
-
-    async def callback(self, interaction: discord.Interaction):
-        await self.handler(interaction, self.builder)
-
-
-class EbChannelSelect(discord.ui.ChannelSelect):
-    def __init__(self, builder):
-        super().__init__(
-            placeholder="Send to a different channel (optional)",
-            channel_types=[discord.ChannelType.text, discord.ChannelType.news],
-            min_values=1,
-            max_values=1
+class EbTextModal(discord.ui.Modal):
+    def __init__(self, view, index=None):
+        super().__init__(title="Edit Text Display" if index is not None else "Add Text Display")
+        self._v = view
+        self._i = index
+        self._field = discord.ui.TextInput(
+            label="Content",
+            style=discord.TextStyle.paragraph,
+            placeholder="Supports markdown: **bold**, ### heading, > quote...",
+            required=True,
+            max_length=2000,
+            default=view._data[index]["content"] if index is not None else None,
         )
-        self.builder = builder
-
-    async def callback(self, interaction: discord.Interaction):
-        new = eb_clone(self.builder.state)
-        new["target"] = self.values[0].id
-        await eb_apply(interaction, self.builder.owner_id, new)
-
-
-class EbMainModal(discord.ui.Modal, title="Title, Description & Footer"):
-    def __init__(self, owner_id: int, state: dict):
-        super().__init__()
-        self.owner_id = owner_id
-        self.state = state
-        self.f_title = discord.ui.TextInput(
-            label="Title (optional)", style=discord.TextStyle.short,
-            required=False, max_length=256, default=state["title"] or None
-        )
-        self.f_desc = discord.ui.TextInput(
-            label="Description (optional)", style=discord.TextStyle.paragraph,
-            required=False, max_length=2000, default=state["description"] or None
-        )
-        self.f_footer = discord.ui.TextInput(
-            label="Footer (optional)", style=discord.TextStyle.short,
-            required=False, max_length=200, default=state["footer"] or None
-        )
-        self.f_thumb = discord.ui.TextInput(
-            label="Thumbnail image URL (optional)", style=discord.TextStyle.short,
-            required=False, max_length=500, default=state["thumbnail"] or None
-        )
-        self.add_item(self.f_title)
-        self.add_item(self.f_desc)
-        self.add_item(self.f_footer)
-        self.add_item(self.f_thumb)
+        self.add_item(self._field)
 
     async def on_submit(self, interaction: discord.Interaction):
-        thumb = self.f_thumb.value.strip()
-        if thumb and not eb_url_ok(thumb):
-            await interaction.response.send_message(view=tk_err("Thumbnail must be a valid http(s) image URL."), ephemeral=True)
+        await self._v._commit(interaction, {"type": "text", "content": self._field.value}, self._i)
+
+
+class EbSeparatorModal(discord.ui.Modal):
+    def __init__(self, view, index=None):
+        super().__init__(title="Edit Separator" if index is not None else "Add Separator")
+        self._v = view
+        self._i = index
+        existing = view._data[index] if index is not None else {}
+        self._divider = discord.ui.TextInput(
+            label="Show divider line? (yes / no)",
+            default="yes" if existing.get("divider", True) else "no",
+            max_length=3,
+            required=True,
+        )
+        self._spacing = discord.ui.TextInput(
+            label="Spacing (small / large)",
+            default=existing.get("spacing", "small"),
+            max_length=5,
+            required=True,
+        )
+        self.add_item(self._divider)
+        self.add_item(self._spacing)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        divider = self._divider.value.strip().lower() not in ("no", "n", "false", "0")
+        spacing = "large" if self._spacing.value.strip().lower() == "large" else "small"
+        await self._v._commit(interaction, {"type": "separator", "divider": divider, "spacing": spacing}, self._i)
+
+
+class EbSectionModal(discord.ui.Modal):
+    def __init__(self, view, index=None):
+        super().__init__(title="Edit Section" if index is not None else "Add Section & Thumbnail")
+        self._v = view
+        self._i = index
+        existing = view._data[index] if index is not None else {}
+        self._text = discord.ui.TextInput(
+            label="Text Content",
+            style=discord.TextStyle.paragraph,
+            required=True,
+            max_length=1000,
+            default=existing.get("content"),
+        )
+        self._url = discord.ui.TextInput(
+            label="Thumbnail URL (optional)",
+            style=discord.TextStyle.short,
+            required=False,
+            placeholder="https://example.com/image.png",
+            max_length=500,
+            default=existing.get("thumbnail_url"),
+        )
+        self.add_item(self._text)
+        self.add_item(self._url)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        url = self._url.value.strip() or None
+        if url and not url.startswith(("http://", "https://")):
+            await interaction.response.send_message("Thumbnail must be a valid http(s) URL.", ephemeral=True)
             return
-        new = eb_clone(self.state)
-        new["title"] = self.f_title.value.strip()
-        new["description"] = self.f_desc.value.strip()
-        new["footer"] = self.f_footer.value.strip()
-        new["thumbnail"] = thumb
-        await eb_apply(interaction, self.owner_id, new)
+        await self._v._commit(interaction, {"type": "section", "content": self._text.value, "thumbnail_url": url}, self._i)
 
 
-class EbTextModal(discord.ui.Modal, title="Add Text Block"):
-    def __init__(self, owner_id: int, state: dict):
-        super().__init__()
-        self.owner_id = owner_id
-        self.state = state
-        self.f_text = discord.ui.TextInput(
-            label="Text (markdown supported)", style=discord.TextStyle.paragraph,
-            required=True, max_length=1000
+class EbGalleryModal(discord.ui.Modal):
+    def __init__(self, view, index=None):
+        super().__init__(title="Edit Media Gallery" if index is not None else "Add Media Gallery")
+        self._v = view
+        self._i = index
+        existing = view._data[index] if index is not None else {}
+        self._urls = discord.ui.TextInput(
+            label="Image URLs — one per line, max 10",
+            style=discord.TextStyle.paragraph,
+            required=True,
+            placeholder="https://example.com/image1.png\nhttps://example.com/image2.png",
+            max_length=4000,
+            default="\n".join(existing.get("urls", [])) or None,
         )
-        self.add_item(self.f_text)
+        self.add_item(self._urls)
 
     async def on_submit(self, interaction: discord.Interaction):
-        new = eb_clone(self.state)
-        new["blocks"].append({"t": "text", "v": self.f_text.value.strip()})
-        await eb_apply(interaction, self.owner_id, new)
-
-
-class EbImageModal(discord.ui.Modal, title="Add Image"):
-    def __init__(self, owner_id: int, state: dict):
-        super().__init__()
-        self.owner_id = owner_id
-        self.state = state
-        self.f_url = discord.ui.TextInput(
-            label="Image URL", style=discord.TextStyle.short,
-            required=True, max_length=500
-        )
-        self.add_item(self.f_url)
-
-    async def on_submit(self, interaction: discord.Interaction):
-        url = self.f_url.value.strip()
-        if not eb_url_ok(url):
-            await interaction.response.send_message(view=tk_err("Please enter a valid http(s) image URL."), ephemeral=True)
+        lines = [ln.strip() for ln in self._urls.value.splitlines() if ln.strip().startswith(("http://", "https://"))]
+        if not lines:
+            await interaction.response.send_message("No valid image URLs found.", ephemeral=True)
             return
-        new = eb_clone(self.state)
-        new["blocks"].append({"t": "img", "v": url})
-        await eb_apply(interaction, self.owner_id, new)
+        await self._v._commit(interaction, {"type": "media_gallery", "urls": lines[:10]}, self._i)
 
 
-class EbLinkModal(discord.ui.Modal, title="Add Link Button"):
-    def __init__(self, owner_id: int, state: dict):
-        super().__init__()
-        self.owner_id = owner_id
-        self.state = state
-        self.f_label = discord.ui.TextInput(
-            label="Button label", style=discord.TextStyle.short,
-            required=True, max_length=80
+class EbButtonRowModal(discord.ui.Modal):
+    def __init__(self, view, index=None):
+        super().__init__(title="Edit Button Row" if index is not None else "Add Button Row")
+        self._v = view
+        self._i = index
+        existing = view._data[index] if index is not None else {}
+        existing_text = "\n".join(f"{b['label']} :: {b['url']}" for b in existing.get("buttons", []))
+        self._input = discord.ui.TextInput(
+            label="Buttons — one per line: Label :: https://url",
+            style=discord.TextStyle.paragraph,
+            required=True,
+            placeholder="Discord :: https://discord.com\nGitHub :: https://github.com",
+            max_length=1000,
+            default=existing_text or None,
         )
-        self.f_url = discord.ui.TextInput(
-            label="Button link (URL)", style=discord.TextStyle.short,
-            required=True, max_length=500
-        )
-        self.add_item(self.f_label)
-        self.add_item(self.f_url)
+        self.add_item(self._input)
 
     async def on_submit(self, interaction: discord.Interaction):
-        url = self.f_url.value.strip()
-        if not eb_url_ok(url):
-            await interaction.response.send_message(view=tk_err("Please enter a valid http(s) link."), ephemeral=True)
+        buttons = []
+        for line in self._input.value.splitlines():
+            if "::" not in line:
+                continue
+            label_part, _, url_part = line.partition("::")
+            label = label_part.strip()[:80]
+            url = url_part.strip()
+            if label and url.startswith(("http://", "https://")):
+                buttons.append({"label": label, "url": url})
+        if not buttons:
+            await interaction.response.send_message("No valid buttons found. Use: `Label :: https://url.com`", ephemeral=True)
             return
-        new = eb_clone(self.state)
-        new["buttons"].append({"label": self.f_label.value.strip(), "url": url})
-        await eb_apply(interaction, self.owner_id, new)
+        await self._v._commit(interaction, {"type": "button_row", "buttons": buttons[:5]}, self._i)
 
 
-class EbColorModal(discord.ui.Modal, title="Accent Color"):
-    def __init__(self, owner_id: int, state: dict):
-        super().__init__()
-        self.owner_id = owner_id
-        self.state = state
-        current = f"#{state['color']:06X}" if state["color"] is not None else None
-        self.f_hex = discord.ui.TextInput(
-            label="Hex color (leave empty for no color)", style=discord.TextStyle.short,
-            required=False, max_length=7, placeholder="#5865F2", default=current
-        )
-        self.add_item(self.f_hex)
-
-    async def on_submit(self, interaction: discord.Interaction):
-        raw = self.f_hex.value.strip().lstrip("#")
-        new = eb_clone(self.state)
-        if not raw:
-            new["color"] = None
-        else:
-            if not re.fullmatch(r"[0-9a-fA-F]{6}", raw):
-                await interaction.response.send_message(view=tk_err("Invalid hex color. Example: `#5865F2`"), ephemeral=True)
-                return
-            new["color"] = int(raw, 16)
-        await eb_apply(interaction, self.owner_id, new)
-
-
-async def eb_h_main(interaction, builder):
-    await interaction.response.send_modal(EbMainModal(builder.owner_id, builder.state))
-
-
-async def eb_h_text(interaction, builder):
-    await interaction.response.send_modal(EbTextModal(builder.owner_id, builder.state))
-
-
-async def eb_h_image(interaction, builder):
-    await interaction.response.send_modal(EbImageModal(builder.owner_id, builder.state))
-
-
-async def eb_h_link(interaction, builder):
-    if len(builder.state["buttons"]) >= EB_MAX_BUTTONS:
-        await interaction.response.send_message(view=tk_err(f"Maximum of {EB_MAX_BUTTONS} buttons."), ephemeral=True)
-        return
-    await interaction.response.send_modal(EbLinkModal(builder.owner_id, builder.state))
-
-
-async def eb_h_color(interaction, builder):
-    await interaction.response.send_modal(EbColorModal(builder.owner_id, builder.state))
-
-
-async def eb_h_sep(interaction, builder):
-    new = eb_clone(builder.state)
-    new["blocks"].append({"t": "sep"})
-    await eb_apply(interaction, builder.owner_id, new)
-
-
-async def eb_h_undo(interaction, builder):
-    if not builder.state["blocks"]:
-        await interaction.response.send_message(view=tk_err("There are no blocks to remove."), ephemeral=True)
-        return
-    new = eb_clone(builder.state)
-    new["blocks"].pop()
-    await eb_apply(interaction, builder.owner_id, new)
-
-
-async def eb_h_unlink(interaction, builder):
-    if not builder.state["buttons"]:
-        await interaction.response.send_message(view=tk_err("There are no buttons to remove."), ephemeral=True)
-        return
-    new = eb_clone(builder.state)
-    new["buttons"].pop()
-    await eb_apply(interaction, builder.owner_id, new)
-
-
-async def eb_h_reset(interaction, builder):
-    await eb_apply(interaction, builder.owner_id, eb_default())
-
-
-async def eb_h_cancel(interaction, builder):
-    builder.stop()
-    await interaction.response.edit_message(view=tk_ok("Embed Builder Closed", "Nothing was sent."))
-
-
-async def eb_h_send(interaction, builder):
-    state = builder.state
-    if not eb_has_content(state):
-        await interaction.response.send_message(view=tk_err("Add a title, description, or a block first."), ephemeral=True)
-        return
-    target = interaction.channel
-    if state.get("target"):
-        chosen = interaction.guild.get_channel(state["target"])
-        if chosen:
-            target = chosen
-    if not target.permissions_for(interaction.guild.me).send_messages:
-        await interaction.response.send_message(view=tk_err(f"I can't send messages in {target.mention}."), ephemeral=True)
-        return
-    try:
-        await target.send(
-            view=EmbedOutputView(state),
-            allowed_mentions=discord.AllowedMentions(everyone=False, roles=True, users=True)
-        )
-    except Exception as e:
-        await interaction.response.send_message(view=tk_err(f"Could not send the embed: `{e}`"), ephemeral=True)
-        return
-    builder.stop()
-    await interaction.response.edit_message(view=tk_ok("Embed Sent", f"Sent to {target.mention}."))
+EB_MODALS = {
+    "text": EbTextModal,
+    "separator": EbSeparatorModal,
+    "section": EbSectionModal,
+    "media_gallery": EbGalleryModal,
+    "button_row": EbButtonRowModal,
+}
 
 
 class EmbedBuilderView(discord.ui.LayoutView):
-    def __init__(self, owner_id: int, state: dict = None):
-        super().__init__(timeout=900)
-        self.owner_id = owner_id
-        self.state = state if state is not None else eb_default()
-        st = self.state
-        target = f"<#{st['target']}>" if st.get("target") else "current channel"
-        self.add_item(
-            discord.ui.TextDisplay(
-                f"## Embed Builder\nSending to: {target} • Elements: {eb_count(st) if eb_has_content(st) else 0}/{EB_MAX_ELEMENTS}"
-            )
-        )
-        self.add_item(eb_container(st, preview=True))
-        row = eb_button_row(st)
-        if row:
-            self.add_item(row)
-        P = discord.ButtonStyle.primary
-        S = discord.ButtonStyle.secondary
-        G = discord.ButtonStyle.success
-        R = discord.ButtonStyle.danger
-        self.add_item(discord.ui.ActionRow(
-            EbBtn(self, "Title / Description", P, eb_h_main, "📝"),
-            EbBtn(self, "Add Text", P, eb_h_text, "➕"),
-            EbBtn(self, "Add Image", P, eb_h_image, "🖼️"),
-            EbBtn(self, "Add Separator", S, eb_h_sep, "➖"),
-        ))
-        self.add_item(discord.ui.ActionRow(
-            EbBtn(self, "Color", S, eb_h_color, "🎨"),
-            EbBtn(self, "Add Button", S, eb_h_link, "🔗"),
-            EbBtn(self, "Undo Block", S, eb_h_undo, "↩️"),
-            EbBtn(self, "Remove Button", S, eb_h_unlink, "🗑️"),
-            EbBtn(self, "Reset", R, eb_h_reset),
-        ))
-        self.add_item(discord.ui.ActionRow(EbChannelSelect(self)))
-        self.add_item(discord.ui.ActionRow(
-            EbBtn(self, "Send", G, eb_h_send, "📨"),
-            EbBtn(self, "Cancel", R, eb_h_cancel),
-        ))
+    def __init__(self, author_id: int, data: list = None, color_key: str = "none", save_cb=None, heading: str = "Container Builder"):
+        super().__init__(timeout=600)
+        self.author_id = author_id
+        self._color_key = color_key if color_key in EB_COLORS else "none"
+        self._data = json.loads(json.dumps(data)) if data else []
+        self._mode = "normal"
+        self._reorder_index = None
+        self._save_cb = save_cb
+        self._heading = heading
+        self._rebuild()
 
-    async def interaction_check(self, interaction: discord.Interaction) -> bool:
-        if interaction.user.id != self.owner_id:
-            await interaction.response.send_message(view=tk_err("This builder isn't yours."), ephemeral=True)
+    def _comp_options(self):
+        return [
+            discord.SelectOption(
+                label=eb_label(c, i)[:100],
+                value=str(i),
+                default=(i == self._reorder_index and self._mode == "reorder"),
+            )
+            for i, c in enumerate(self._data)
+        ]
+
+    def _build_preview(self):
+        c = discord.ui.Container(accent_color=EB_COLORS.get(self._color_key))
+        if not self._data:
+            c.add_item(discord.ui.TextDisplay("-# Your container is empty. Use the controls below to add components."))
+        else:
+            for comp in self._data:
+                eb_render_into(c, comp)
+        return c
+
+    def _cancel_row(self):
+        row = discord.ui.ActionRow(
+            discord.ui.Button(label="Cancel", style=discord.ButtonStyle.secondary, custom_id="eb_cancel")
+        )
+        row.children[0].callback = self._cb_cancel
+        return row
+
+    def _ctrl_normal(self):
+        c = discord.ui.Container(accent_color=None)
+        c.add_item(discord.ui.TextDisplay(f"**{self._heading}**"))
+        c.add_item(discord.ui.Separator())
+        c.add_item(discord.ui.TextDisplay(
+            f"-# Color: **{EB_COLOR_NAMES[self._color_key]}**  |  Components: **{len(self._data)} / {EB_MAX_COMPONENTS}**"
+        ))
+        c.add_item(discord.ui.Separator(visible=False))
+        at_max = len(self._data) >= EB_MAX_COMPONENTS
+        add_opts = [
+            discord.SelectOption(label="Text Display", value="text", description="A block of markdown text"),
+            discord.SelectOption(label="Separator", value="separator", description="A divider line or invisible spacer"),
+            discord.SelectOption(label="Section & Thumbnail", value="section", description="Text with a thumbnail image on the right"),
+            discord.SelectOption(label="Media Gallery", value="media_gallery", description="One or more images in a grid"),
+            discord.SelectOption(label="Button Row", value="button_row", description="Up to 5 link buttons in a row"),
+        ]
+        add_row = discord.ui.ActionRow(discord.ui.Select(
+            placeholder="Add a component..." if not at_max else f"Maximum {EB_MAX_COMPONENTS} components reached",
+            custom_id="eb_add",
+            options=add_opts,
+            disabled=at_max,
+        ))
+        add_row.children[0].callback = self._cb_add
+        c.add_item(add_row)
+        has = bool(self._data)
+        can_reorder = len(self._data) >= 2
+        btn_row = discord.ui.ActionRow(
+            discord.ui.Button(label="Edit", style=discord.ButtonStyle.secondary, custom_id="eb_edit", disabled=not has),
+            discord.ui.Button(label="Remove", style=discord.ButtonStyle.danger, custom_id="eb_remove", disabled=not has),
+            discord.ui.Button(label="Color", style=discord.ButtonStyle.secondary, custom_id="eb_color"),
+            discord.ui.Button(label="Reorder", style=discord.ButtonStyle.secondary, custom_id="eb_reorder", disabled=not can_reorder),
+            discord.ui.Button(
+                label="Save" if self._save_cb else "Send",
+                style=discord.ButtonStyle.primary,
+                custom_id="eb_send"
+            ),
+        )
+        btn_row.children[0].callback = self._cb_edit_btn
+        btn_row.children[1].callback = self._cb_remove_btn
+        btn_row.children[2].callback = self._cb_color_btn
+        btn_row.children[3].callback = self._cb_reorder_btn
+        btn_row.children[4].callback = self._cb_save if self._save_cb else self._cb_send_btn
+        c.add_item(btn_row)
+        return c
+
+    def _ctrl_color(self):
+        c = discord.ui.Container(accent_color=None)
+        c.add_item(discord.ui.TextDisplay("**Select Accent Color**"))
+        c.add_item(discord.ui.Separator())
+        c.add_item(discord.ui.TextDisplay("-# Choose the color bar shown on the left side of the container."))
+        c.add_item(discord.ui.Separator(visible=False))
+        opts = [
+            discord.SelectOption(label=name, value=key, default=(key == self._color_key))
+            for key, name in EB_COLOR_NAMES.items()
+        ]
+        sel_row = discord.ui.ActionRow(discord.ui.Select(placeholder="Choose a color...", custom_id="eb_color_sel", options=opts))
+        sel_row.children[0].callback = self._cb_color_sel
+        c.add_item(sel_row)
+        c.add_item(self._cancel_row())
+        return c
+
+    def _ctrl_pick(self, title: str, hint: str, placeholder: str, cid: str, cb):
+        c = discord.ui.Container(accent_color=None)
+        c.add_item(discord.ui.TextDisplay(f"**{title}**"))
+        c.add_item(discord.ui.Separator())
+        c.add_item(discord.ui.TextDisplay(f"-# {hint}"))
+        c.add_item(discord.ui.Separator(visible=False))
+        sel_row = discord.ui.ActionRow(discord.ui.Select(placeholder=placeholder, custom_id=cid, options=self._comp_options()))
+        sel_row.children[0].callback = cb
+        c.add_item(sel_row)
+        c.add_item(self._cancel_row())
+        return c
+
+    def _ctrl_reorder(self):
+        c = discord.ui.Container(accent_color=None)
+        c.add_item(discord.ui.TextDisplay("**Reorder Components**"))
+        c.add_item(discord.ui.Separator())
+        if self._reorder_index is not None:
+            label = eb_label(self._data[self._reorder_index], self._reorder_index)
+            c.add_item(discord.ui.TextDisplay(f"-# Selected: **{label[:80]}**"))
+        else:
+            c.add_item(discord.ui.TextDisplay("-# Select a component below, then use Move Up / Move Down."))
+        c.add_item(discord.ui.Separator(visible=False))
+        sel_row = discord.ui.ActionRow(discord.ui.Select(
+            placeholder="Select a component to move...", custom_id="eb_reorder_sel", options=self._comp_options()
+        ))
+        sel_row.children[0].callback = self._cb_reorder_sel
+        c.add_item(sel_row)
+        can_up = self._reorder_index is not None and self._reorder_index > 0
+        can_down = self._reorder_index is not None and self._reorder_index < len(self._data) - 1
+        nav_row = discord.ui.ActionRow(
+            discord.ui.Button(label="Move Up", style=discord.ButtonStyle.secondary, custom_id="eb_up", disabled=not can_up),
+            discord.ui.Button(label="Move Down", style=discord.ButtonStyle.secondary, custom_id="eb_down", disabled=not can_down),
+            discord.ui.Button(label="Done", style=discord.ButtonStyle.primary, custom_id="eb_done"),
+        )
+        nav_row.children[0].callback = self._cb_move_up
+        nav_row.children[1].callback = self._cb_move_down
+        nav_row.children[2].callback = self._cb_cancel
+        c.add_item(nav_row)
+        return c
+
+    def _ctrl_send(self):
+        c = discord.ui.Container(accent_color=None)
+        c.add_item(discord.ui.TextDisplay("**Send Container**"))
+        c.add_item(discord.ui.Separator())
+        c.add_item(discord.ui.TextDisplay("-# Select the channel to send your container to."))
+        c.add_item(discord.ui.Separator(visible=False))
+        sel_row = discord.ui.ActionRow(discord.ui.ChannelSelect(
+            placeholder="Select a channel...",
+            custom_id="eb_channel_sel",
+            channel_types=[discord.ChannelType.text, discord.ChannelType.news],
+        ))
+        sel_row.children[0].callback = self._cb_channel_sel
+        c.add_item(sel_row)
+        c.add_item(self._cancel_row())
+        return c
+
+    def _ctrl_done(self, text: str):
+        c = discord.ui.Container(accent_color=None)
+        c.add_item(discord.ui.TextDisplay("**Done**"))
+        c.add_item(discord.ui.Separator())
+        c.add_item(discord.ui.TextDisplay(text))
+        if not self._save_cb:
+            c.add_item(discord.ui.Separator(visible=False))
+            reset_row = discord.ui.ActionRow(
+                discord.ui.Button(label="Build Another", style=discord.ButtonStyle.secondary, custom_id="eb_reset")
+            )
+            reset_row.children[0].callback = self._cb_reset
+            c.add_item(reset_row)
+        return c
+
+    def _rebuild(self, done_text: str = None):
+        self.clear_items()
+        self.add_item(self._build_preview())
+        if self._mode == "normal":
+            self.add_item(self._ctrl_normal())
+        elif self._mode == "color":
+            self.add_item(self._ctrl_color())
+        elif self._mode == "edit":
+            self.add_item(self._ctrl_pick("Edit a Component", "Select the component you want to edit.", "Select a component to edit...", "eb_edit_sel", self._cb_edit_sel))
+        elif self._mode == "remove":
+            self.add_item(self._ctrl_pick("Remove a Component", "Select the component you want to remove.", "Select a component to remove...", "eb_remove_sel", self._cb_remove_sel))
+        elif self._mode == "reorder":
+            self.add_item(self._ctrl_reorder())
+        elif self._mode == "send":
+            self.add_item(self._ctrl_send())
+        elif self._mode == "done":
+            self.add_item(self._ctrl_done(done_text or "Done."))
+
+    async def _guard(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.author_id:
+            await interaction.response.send_message("Only the person who ran this command can use these controls.", ephemeral=True)
             return False
         return True
 
+    async def _refresh(self, interaction: discord.Interaction, mode: str = None, done_text: str = None):
+        if mode:
+            self._mode = mode
+        self._rebuild(done_text)
+        await interaction.response.edit_message(view=self)
 
-@tree.command(name="embed", description="Build and send a Components V2 embed", guild=discord.Object(id=GUILD_ID))
+    async def _commit(self, interaction: discord.Interaction, comp: dict, index):
+        new = list(self._data)
+        if index is None:
+            new.append(comp)
+        else:
+            new[index] = comp
+        problem = eb_fit(new)
+        if problem:
+            await interaction.response.send_message(problem, ephemeral=True)
+            return
+        self._data = new
+        await self._refresh(interaction, "normal")
+
+    async def _cb_add(self, interaction: discord.Interaction):
+        if not await self._guard(interaction):
+            return
+        await interaction.response.send_modal(EB_MODALS[interaction.data["values"][0]](self))
+
+    async def _cb_edit_btn(self, interaction: discord.Interaction):
+        if await self._guard(interaction):
+            await self._refresh(interaction, "edit")
+
+    async def _cb_remove_btn(self, interaction: discord.Interaction):
+        if await self._guard(interaction):
+            await self._refresh(interaction, "remove")
+
+    async def _cb_color_btn(self, interaction: discord.Interaction):
+        if await self._guard(interaction):
+            await self._refresh(interaction, "color")
+
+    async def _cb_reorder_btn(self, interaction: discord.Interaction):
+        if await self._guard(interaction):
+            self._reorder_index = None
+            await self._refresh(interaction, "reorder")
+
+    async def _cb_send_btn(self, interaction: discord.Interaction):
+        if not await self._guard(interaction):
+            return
+        if not self._data:
+            await interaction.response.send_message("Add at least one component first.", ephemeral=True)
+            return
+        await self._refresh(interaction, "send")
+
+    async def _cb_save(self, interaction: discord.Interaction):
+        if not await self._guard(interaction):
+            return
+        if not self._data:
+            await interaction.response.send_message("Add at least one component first.", ephemeral=True)
+            return
+        try:
+            text = await self._save_cb(interaction, json.loads(json.dumps(self._data)), self._color_key)
+        except Exception as e:
+            await interaction.response.send_message(f"Failed to save: `{e}`", ephemeral=True)
+            return
+        self.stop()
+        await self._refresh(interaction, "done", text)
+
+    async def _cb_cancel(self, interaction: discord.Interaction):
+        if await self._guard(interaction):
+            self._reorder_index = None
+            await self._refresh(interaction, "normal")
+
+    async def _cb_color_sel(self, interaction: discord.Interaction):
+        if await self._guard(interaction):
+            self._color_key = interaction.data["values"][0]
+            await self._refresh(interaction, "normal")
+
+    async def _cb_edit_sel(self, interaction: discord.Interaction):
+        if not await self._guard(interaction):
+            return
+        index = int(interaction.data["values"][0])
+        await interaction.response.send_modal(EB_MODALS[self._data[index]["type"]](self, index))
+
+    async def _cb_remove_sel(self, interaction: discord.Interaction):
+        if not await self._guard(interaction):
+            return
+        self._data.pop(int(interaction.data["values"][0]))
+        self._reorder_index = None
+        await self._refresh(interaction, "normal")
+
+    async def _cb_reorder_sel(self, interaction: discord.Interaction):
+        if await self._guard(interaction):
+            self._reorder_index = int(interaction.data["values"][0])
+            await self._refresh(interaction)
+
+    async def _cb_move_up(self, interaction: discord.Interaction):
+        if not await self._guard(interaction):
+            return
+        i = self._reorder_index
+        if i is not None and i > 0:
+            self._data[i], self._data[i - 1] = self._data[i - 1], self._data[i]
+            self._reorder_index = i - 1
+        await self._refresh(interaction)
+
+    async def _cb_move_down(self, interaction: discord.Interaction):
+        if not await self._guard(interaction):
+            return
+        i = self._reorder_index
+        if i is not None and i < len(self._data) - 1:
+            self._data[i], self._data[i + 1] = self._data[i + 1], self._data[i]
+            self._reorder_index = i + 1
+        await self._refresh(interaction)
+
+    async def _cb_channel_sel(self, interaction: discord.Interaction):
+        if not await self._guard(interaction):
+            return
+        channel = interaction.guild.get_channel(int(interaction.data["values"][0]))
+        if channel is None:
+            await interaction.response.send_message("Could not find that channel.", ephemeral=True)
+            return
+        try:
+            await channel.send(
+                view=eb_make_view(self._data, self._color_key),
+                allowed_mentions=discord.AllowedMentions(everyone=False, roles=True, users=True)
+            )
+        except discord.Forbidden:
+            await interaction.response.send_message(f"I don't have permission to send messages in {channel.mention}.", ephemeral=True)
+            return
+        except Exception as exc:
+            await interaction.response.send_message(f"Failed to send: {exc}", ephemeral=True)
+            return
+        await self._refresh(interaction, "done", f"Your container was sent to {channel.mention}.")
+
+    async def _cb_reset(self, interaction: discord.Interaction):
+        if await self._guard(interaction):
+            self._color_key = "none"
+            self._data = []
+            self._reorder_index = None
+            await self._refresh(interaction, "normal")
+
+
+@tree.command(name="embed", description="Build and send a Components V2 container", guild=discord.Object(id=GUILD_ID))
 @discord.app_commands.default_permissions(manage_messages=True)
 async def embed_builder(interaction: discord.Interaction):
     if not interaction.user.guild_permissions.manage_messages:
         await interaction.response.send_message(view=tk_err("You need Manage Messages to use this."), ephemeral=True)
         return
     await interaction.response.send_message(view=EmbedBuilderView(interaction.user.id), ephemeral=True)
+
+
+AR_MATCHES = {"exact": "Exact message", "starts": "Starts with", "contains": "Contains word"}
+AR_MAX = 50
+ar_cooldowns = {}
+
+
+def ar_list() -> list:
+    return config.setdefault("autoresponders", [])
+
+
+def ar_get(trigger: str):
+    t = trigger.strip().lower()
+    for r in ar_list():
+        if r["trigger"] == t:
+            return r
+    return None
+
+
+def ar_store(trigger: str, match: str, plain, data, color_key: str) -> None:
+    t = trigger.strip().lower()
+    items = ar_list()
+    items[:] = [r for r in items if r["trigger"] != t]
+    items.append({"trigger": t, "match": match, "plain": plain, "data": data or [], "color": color_key})
+    save_config(config)
+
+
+def ar_find(content: str):
+    text = content.strip().lower()
+    if not text:
+        return None
+    items = ar_list()
+    for r in sorted((r for r in items if r["match"] == "exact"), key=lambda r: -len(r["trigger"])):
+        if text == r["trigger"]:
+            return r
+    for r in sorted((r for r in items if r["match"] == "starts"), key=lambda r: -len(r["trigger"])):
+        if text.startswith(r["trigger"]):
+            return r
+    for r in sorted((r for r in items if r["match"] == "contains"), key=lambda r: -len(r["trigger"])):
+        if re.search(rf"(?<!\w){re.escape(r['trigger'])}(?!\w)", text):
+            return r
+    return None
+
+
+def ar_vars(text: str, message: discord.Message) -> str:
+    return (
+        text.replace("{user}", message.author.mention)
+        .replace("{username}", message.author.display_name)
+        .replace("{server}", message.guild.name)
+        .replace("{channel}", message.channel.mention)
+        .replace("{membercount}", str(message.guild.member_count))
+    )
+
+
+async def ar_check(message: discord.Message) -> bool:
+    if not message.guild or message.guild.id != GUILD_ID or not message.content:
+        return False
+    r = ar_find(message.content)
+    if not r:
+        return False
+    key = (message.channel.id, r["trigger"])
+    now = time.time()
+    if now - ar_cooldowns.get(key, 0) < 5:
+        return True
+    ar_cooldowns[key] = now
+    mentions = discord.AllowedMentions(users=True, roles=False, everyone=False)
+    try:
+        if r.get("plain") is not None:
+            await message.reply(ar_vars(r["plain"], message), mention_author=False, allowed_mentions=mentions)
+        else:
+            view = eb_make_view(r["data"], r.get("color", "none"), lambda s: ar_vars(s, message))
+            await message.reply(view=view, mention_author=False, allowed_mentions=mentions)
+    except Exception as e:
+        print(f"Auto responder failed: {e}")
+    return True
+
+
+def ar_builder(author_id: int, trigger: str, match: str, data=None, color_key="none") -> EmbedBuilderView:
+    async def cb(interaction, built, color):
+        ar_store(trigger, match, None, built, color)
+        return f"Auto responder saved.\n**Trigger:** `{trigger}`\n**Match:** {AR_MATCHES[match]}"
+    return EmbedBuilderView(author_id, data, color_key, cb, f"Auto Responder — {trigger}")
+
+
+def ar_summary() -> str:
+    items = ar_list()
+    if not items:
+        return "No auto responders yet."
+    lines = []
+    for r in items:
+        if r.get("plain") is not None:
+            preview = r["plain"][:50].replace("\n", " ")
+        else:
+            first = next((c for c in r["data"] if c["type"] in ("text", "section")), None)
+            preview = f"[container] {first['content'][:40].replace(chr(10), ' ')}" if first else "[container]"
+        lines.append(f"`{r['trigger']}` ({AR_MATCHES[r['match']]}) → {preview}")
+    text = "\n".join(lines)
+    return text[:3500]
+
+
+ar_group = discord.app_commands.Group(
+    name="autoresponder",
+    description="Auto responder commands",
+    guild_ids=[GUILD_ID],
+    default_permissions=discord.Permissions(manage_guild=True)
+)
+
+
+async def ar_autocomplete(interaction: discord.Interaction, current: str):
+    return [
+        discord.app_commands.Choice(name=r["trigger"][:100], value=r["trigger"])
+        for r in ar_list() if current.lower() in r["trigger"]
+    ][:25]
+
+
+def ar_denied(user) -> bool:
+    return not user.guild_permissions.manage_guild
+
+
+@ar_group.command(name="add", description="Add an auto responder")
+@discord.app_commands.describe(
+    trigger="Word or message that triggers the bot",
+    response="Quick text reply. Leave empty to build a container instead",
+    match="How the trigger is matched"
+)
+@discord.app_commands.choices(match=[
+    discord.app_commands.Choice(name="Exact message", value="exact"),
+    discord.app_commands.Choice(name="Starts with", value="starts"),
+    discord.app_commands.Choice(name="Contains word", value="contains"),
+])
+async def ar_add(interaction: discord.Interaction, trigger: str, response: str = None, match: str = "exact"):
+    if ar_denied(interaction.user):
+        await interaction.response.send_message(view=tk_err("You need Manage Server to use this."), ephemeral=True)
+        return
+    trigger = trigger.strip().lower()
+    if not trigger or len(trigger) > 100:
+        await interaction.response.send_message(view=tk_err("Trigger must be 1-100 characters."), ephemeral=True)
+        return
+    if not ar_get(trigger) and len(ar_list()) >= AR_MAX:
+        await interaction.response.send_message(view=tk_err(f"Maximum of {AR_MAX} auto responders."), ephemeral=True)
+        return
+    if response:
+        ar_store(trigger, match, response, [], "none")
+        await interaction.response.send_message(
+            view=tk_ok("Auto Responder Saved", f"**Trigger:** `{trigger}`\n**Match:** {AR_MATCHES[match]}\n**Reply:** {response[:300]}"),
+            ephemeral=True
+        )
+        return
+    await interaction.response.send_message(view=ar_builder(interaction.user.id, trigger, match), ephemeral=True)
+
+
+@ar_group.command(name="edit", description="Edit an auto responder in the container builder")
+@discord.app_commands.describe(trigger="Trigger to edit")
+@discord.app_commands.autocomplete(trigger=ar_autocomplete)
+async def ar_edit(interaction: discord.Interaction, trigger: str):
+    if ar_denied(interaction.user):
+        await interaction.response.send_message(view=tk_err("You need Manage Server to use this."), ephemeral=True)
+        return
+    r = ar_get(trigger)
+    if not r:
+        await interaction.response.send_message(view=tk_err("That auto responder doesn't exist."), ephemeral=True)
+        return
+    data = [{"type": "text", "content": r["plain"]}] if r.get("plain") is not None else r["data"]
+    await interaction.response.send_message(
+        view=ar_builder(interaction.user.id, r["trigger"], r["match"], data, r.get("color", "none")),
+        ephemeral=True
+    )
+
+
+@ar_group.command(name="remove", description="Remove an auto responder")
+@discord.app_commands.describe(trigger="Trigger to remove")
+@discord.app_commands.autocomplete(trigger=ar_autocomplete)
+async def ar_remove(interaction: discord.Interaction, trigger: str):
+    if ar_denied(interaction.user):
+        await interaction.response.send_message(view=tk_err("You need Manage Server to use this."), ephemeral=True)
+        return
+    r = ar_get(trigger)
+    if not r:
+        await interaction.response.send_message(view=tk_err("That auto responder doesn't exist."), ephemeral=True)
+        return
+    ar_list().remove(r)
+    save_config(config)
+    await interaction.response.send_message(view=tk_ok("Auto Responder Removed", f"`{r['trigger']}` was removed."), ephemeral=True)
+
+
+@ar_group.command(name="list", description="List all auto responders")
+async def ar_list_cmd(interaction: discord.Interaction):
+    if ar_denied(interaction.user):
+        await interaction.response.send_message(view=tk_err("You need Manage Server to use this."), ephemeral=True)
+        return
+    await interaction.response.send_message(view=TicketInfoView(f"Auto Responders ({len(ar_list())})", ar_summary()), ephemeral=True)
+
+
+@ar_group.command(name="clear", description="Remove every auto responder")
+async def ar_clear(interaction: discord.Interaction):
+    if not interaction.user.guild_permissions.administrator:
+        await interaction.response.send_message(view=tk_err("You need Administrator to use this."), ephemeral=True)
+        return
+    ar_list().clear()
+    save_config(config)
+    await interaction.response.send_message(view=tk_ok("Auto Responders Cleared", "All auto responders were removed."), ephemeral=True)
+
+
+tree.add_command(ar_group, guild=discord.Object(id=GUILD_ID))
+
+
+async def ar_prefix(message: discord.Message):
+    parts = message.content[len(PREFIX):].split(None, 2)
+    sub = parts[1].lower() if len(parts) > 1 else ""
+    rest = parts[2].strip() if len(parts) > 2 else ""
+    usage = (
+        "`.ar add <trigger> | <reply>`\n"
+        "`.ar add <trigger>` (opens the container builder)\n"
+        "`.ar add contains:<trigger> | <reply>` or `starts:<trigger>`\n"
+        "`.ar edit <trigger>` `.ar remove <trigger>` `.ar list`"
+    )
+    if sub == "add" and rest:
+        trig_part, sep, reply = rest.partition("|")
+        trig = trig_part.strip().lower()
+        match = "exact"
+        for key in ("contains", "starts", "exact"):
+            if trig.startswith(f"{key}:"):
+                match = key
+                trig = trig[len(key) + 1:].strip()
+                break
+        reply = reply.strip()
+        if not trig or len(trig) > 100:
+            await message.channel.send(view=tk_err("Trigger must be 1-100 characters."))
+            return
+        if not ar_get(trig) and len(ar_list()) >= AR_MAX:
+            await message.channel.send(view=tk_err(f"Maximum of {AR_MAX} auto responders."))
+            return
+        if sep and reply:
+            ar_store(trig, match, reply, [], "none")
+            await message.channel.send(view=tk_ok("Auto Responder Saved", f"**Trigger:** `{trig}`\n**Match:** {AR_MATCHES[match]}\n**Reply:** {reply[:300]}"))
+            return
+        await message.channel.send(view=ar_builder(message.author.id, trig, match))
+    elif sub == "edit" and rest:
+        r = ar_get(rest)
+        if not r:
+            await message.channel.send(view=tk_err("That auto responder doesn't exist."))
+            return
+        data = [{"type": "text", "content": r["plain"]}] if r.get("plain") is not None else r["data"]
+        await message.channel.send(view=ar_builder(message.author.id, r["trigger"], r["match"], data, r.get("color", "none")))
+    elif sub in ("remove", "delete") and rest:
+        r = ar_get(rest)
+        if not r:
+            await message.channel.send(view=tk_err("That auto responder doesn't exist."))
+            return
+        ar_list().remove(r)
+        save_config(config)
+        await message.channel.send(view=tk_ok("Auto Responder Removed", f"`{r['trigger']}` was removed."))
+    elif sub == "list":
+        await message.channel.send(view=TicketInfoView(f"Auto Responders ({len(ar_list())})", ar_summary()))
+    else:
+        await message.channel.send(view=TicketInfoView("Auto Responder", usage))
 
 
 @bot.event
