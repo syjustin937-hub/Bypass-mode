@@ -387,7 +387,7 @@ HELP_PAGES = [
         "**Punishments**\n"
         "`.jail setup` `.jail @user [reason]` `.unjail @user`\n"
         "`.softban @user [reason]` `.restrict @user` `.picperms @user [#channel]`\n"
-        "`.forcenick @user <nickname|off>` `.honeypot set #channel [action]`\n"
+        "`.forcenick @user <nickname|off>` `.honeypot setup #channel <timeout|quarantine|kick|ban|softban>`\n"
         "`.masspurge @user [limit]` `.moveall #voice`\n\n"
         "**Staff Tools**\n"
         "`.modmail <setup|off|status|reply|close|block|unblock>`\n"
@@ -475,7 +475,7 @@ class HelpView(discord.ui.LayoutView):
         if page_names is None:
             name = bot.user.name if bot.user else "Help"
             header = discord.ui.TextDisplay(f"# {name}\nPrefix `{PREFIX}` · Browse the categories below")
-            container = discord.ui.Container(accent_color=discord.Color.blurple())
+            container = discord.ui.Container()
             if bot.user:
                 section = discord.ui.Section(accessory=discord.ui.Thumbnail(media=bot.user.display_avatar.url))
                 section.add_item(header)
@@ -503,7 +503,6 @@ class HelpView(discord.ui.LayoutView):
                     HelpNavButton("Previous", category, self.page - 1, self, disabled=self.page == 0),
                     HelpNavButton("Next", category, self.page + 1, self, disabled=self.page >= total - 1),
                 ),
-                accent_color=discord.Color.blurple()
             )
         )
 
@@ -519,7 +518,6 @@ class AfkSetView(discord.ui.LayoutView):
                     f"**User:** {member.mention}\n"
                     f"**Reason:** {reason}"
                 ),
-                accent_color=discord.Color.yellow()
             )
         )
 
@@ -532,7 +530,6 @@ class AfkReturnView(discord.ui.LayoutView):
                 discord.ui.TextDisplay(f"# 👋 Welcome back, {member.display_name}!"),
                 discord.ui.Separator(),
                 discord.ui.TextDisplay("Your AFK status has been removed."),
-                accent_color=discord.Color.green()
             )
         )
 
@@ -548,7 +545,6 @@ class AfkMentionView(discord.ui.LayoutView):
                     f"**Reason:** {reason}\n"
                     f"**Since:** <t:{timestamp}:R>"
                 ),
-                accent_color=discord.Color.yellow()
             )
         )
 
@@ -566,7 +562,6 @@ class SnipeView(discord.ui.LayoutView):
                     f"**Sent:** <t:{data['timestamp']}:R>\n\n"
                     f"{content}"
                 ),
-                accent_color=discord.Color.blurple()
             )
         )
 
@@ -579,7 +574,6 @@ class SnipeEmptyView(discord.ui.LayoutView):
                 discord.ui.TextDisplay("# 🔍 Snipe"),
                 discord.ui.Separator(),
                 discord.ui.TextDisplay("No recently deleted messages in this channel."),
-                accent_color=discord.Color.red()
             )
         )
 
@@ -593,14 +587,12 @@ class VerifyEphemeralView(discord.ui.LayoutView):
                     discord.ui.TextDisplay("# ✅ You have been verified!"),
                     discord.ui.Separator(),
                     discord.ui.TextDisplay(message),
-                    accent_color=discord.Color.green()
                 )
             )
         else:
             self.add_item(
                 discord.ui.Container(
                     discord.ui.TextDisplay(f"# {message}"),
-                    accent_color=discord.Color.red()
                 )
             )
 
@@ -629,7 +621,6 @@ class UserKickedView(discord.ui.LayoutView):
                     f"{user.mention} has been kicked\n"
                     f"Reason: MrBeast scam auto detected"
                 ),
-                accent_color=discord.Color.red()
             )
         )
 
@@ -642,7 +633,6 @@ class ProcessingView(discord.ui.LayoutView):
                 discord.ui.TextDisplay("# Processing..."),
                 discord.ui.Separator(),
                 discord.ui.TextDisplay("Please wait while I bypass the link."),
-                accent_color=discord.Color.yellow()
             )
         )
 
@@ -657,7 +647,6 @@ class SuccessView(discord.ui.LayoutView):
                 discord.ui.TextDisplay(f"```\n{result}\n```"),
                 discord.ui.Separator(),
                 discord.ui.ActionRow(CopyButton(result)),
-                accent_color=discord.Color.green()
             )
         )
 
@@ -670,7 +659,6 @@ class FailedView(discord.ui.LayoutView):
                 discord.ui.TextDisplay("# Failed!"),
                 discord.ui.Separator(),
                 discord.ui.TextDisplay(message),
-                accent_color=discord.Color.red()
             )
         )
 
@@ -683,7 +671,6 @@ class PingView(discord.ui.LayoutView):
                 discord.ui.TextDisplay("# Pong!"),
                 discord.ui.Separator(),
                 discord.ui.TextDisplay(f"Latency: **{latency}ms**"),
-                accent_color=discord.Color.blurple()
             )
         )
 
@@ -699,7 +686,6 @@ class SetupView(discord.ui.LayoutView):
                     f"Auto bypass channel set to {channel.mention}\n"
                     f"Links sent in that channel will be bypassed automatically."
                 ),
-                accent_color=discord.Color.green()
             )
         )
 
@@ -712,7 +698,6 @@ class SayView(discord.ui.LayoutView):
                 discord.ui.TextDisplay("# Message Sent"),
                 discord.ui.Separator(),
                 discord.ui.TextDisplay(f"Sent to {channel.mention}:\n> {content}"),
-                accent_color=discord.Color.green()
             )
         )
 
@@ -728,7 +713,6 @@ class KickResultView(discord.ui.LayoutView):
                     f"**User:** {member.mention} (`{member.id}`)\n"
                     f"**Reason:** {reason}"
                 ),
-                accent_color=discord.Color.orange()
             )
         )
 
@@ -744,7 +728,6 @@ class BanResultView(discord.ui.LayoutView):
                     f"**User:** {member.mention} (`{member.id}`)\n"
                     f"**Reason:** {reason}"
                 ),
-                accent_color=discord.Color.red()
             )
         )
 
@@ -757,7 +740,6 @@ class UnbanResultView(discord.ui.LayoutView):
                 discord.ui.TextDisplay("# Member Unbanned"),
                 discord.ui.Separator(),
                 discord.ui.TextDisplay(f"**User ID:** `{user_id}` has been unbanned."),
-                accent_color=discord.Color.green()
             )
         )
 
@@ -770,7 +752,6 @@ class PurgeResultView(discord.ui.LayoutView):
                 discord.ui.TextDisplay("# Messages Purged"),
                 discord.ui.Separator(),
                 discord.ui.TextDisplay(f"Deleted **{count}** message(s) from {channel.mention}"),
-                accent_color=discord.Color.blurple()
             )
         )
 
@@ -787,7 +768,6 @@ class TimeoutResultView(discord.ui.LayoutView):
                     f"**Duration:** {minutes} minute(s)\n"
                     f"**Reason:** {reason}"
                 ),
-                accent_color=discord.Color.yellow()
             )
         )
 
@@ -802,7 +782,6 @@ class UntimeoutResultView(discord.ui.LayoutView):
                 discord.ui.TextDisplay(
                     f"**User:** {member.mention} (`{member.id}`) timeout has been removed."
                 ),
-                accent_color=discord.Color.green()
             )
         )
 
@@ -819,7 +798,6 @@ class WarnAddedView(discord.ui.LayoutView):
                     f"**Reason:** {reason}\n"
                     f"**Total Warns:** {total}"
                 ),
-                accent_color=discord.Color.yellow()
             )
         )
 
@@ -839,7 +817,6 @@ class WarnsListView(discord.ui.LayoutView):
                 discord.ui.TextDisplay(f"# Warnings for {member.display_name}"),
                 discord.ui.Separator(),
                 discord.ui.TextDisplay(body),
-                accent_color=discord.Color.orange()
             )
         )
 
@@ -852,7 +829,6 @@ class WarnsCleared(discord.ui.LayoutView):
                 discord.ui.TextDisplay("# Warnings Cleared"),
                 discord.ui.Separator(),
                 discord.ui.TextDisplay(f"All warnings for {member.mention} have been removed."),
-                accent_color=discord.Color.green()
             )
         )
 
@@ -866,7 +842,6 @@ class SlowmodeView(discord.ui.LayoutView):
                 discord.ui.TextDisplay("# Slowmode Updated"),
                 discord.ui.Separator(),
                 discord.ui.TextDisplay(msg),
-                accent_color=discord.Color.blurple()
             )
         )
 
@@ -881,7 +856,6 @@ class LockView(discord.ui.LayoutView):
                 discord.ui.TextDisplay(title),
                 discord.ui.Separator(),
                 discord.ui.TextDisplay(msg),
-                accent_color=discord.Color.red() if locked else discord.Color.green()
             )
         )
 
@@ -901,7 +875,6 @@ class GiveawayActiveView(discord.ui.LayoutView):
                 ),
                 discord.ui.Separator(),
                 discord.ui.ActionRow(GiveawayEnterButton(entry_count)),
-                accent_color=discord.Color.gold()
             )
         )
 
@@ -918,7 +891,6 @@ class GiveawayEndedView(discord.ui.LayoutView):
                     f"**Winners:** {winner_count}\n"
                     f"**Total Entries:** {entry_count}"
                 ),
-                accent_color=discord.Color.dark_grey()
             )
         )
 
@@ -935,7 +907,6 @@ class GiveawayStartedView(discord.ui.LayoutView):
                     f"**Prize:** {prize}\n"
                     f"**Ends:** <t:{end_ts}:R>"
                 ),
-                accent_color=discord.Color.gold()
             )
         )
 
@@ -949,7 +920,6 @@ class GiveawayRerollView(discord.ui.LayoutView):
                 discord.ui.TextDisplay("# Giveaway Rerolled"),
                 discord.ui.Separator(),
                 discord.ui.TextDisplay(f"New winner(s): {winner_text}"),
-                accent_color=discord.Color.gold()
             )
         )
 
@@ -962,7 +932,6 @@ class InfoView(discord.ui.LayoutView):
                 discord.ui.TextDisplay(f"# {title}"),
                 discord.ui.Separator(),
                 discord.ui.TextDisplay(body),
-                accent_color=color
             )
         )
 
@@ -1636,7 +1605,6 @@ class LogView(discord.ui.LayoutView):
                 discord.ui.TextDisplay(body),
                 discord.ui.Separator(),
                 discord.ui.TextDisplay(f"-# <t:{ts}:F> • <t:{ts}:R>"),
-                accent_color=color
             )
         )
 
@@ -7225,7 +7193,10 @@ ACTION_STYLE.update({
 
 MX_NO_MENTIONS = discord.AllowedMentions.none()
 MX_IMAGE_RE = re.compile(r"https?://\S*(\.(png|jpe?g|gif|webp)|tenor\.com|giphy\.com|imgur\.com|cdn\.discordapp|media\.discordapp)\S*", re.I)
-MX_PUNISHMENTS = ["ban", "softban", "kick", "timeout", "jail"]
+MX_PUNISHMENTS = ["timeout", "quarantine", "kick", "ban", "softban"]
+MX_HP_LABELS = {"timeout": "Timeouts", "quarantine": "Quarantines", "kick": "Kicks", "ban": "Bans", "softban": "Softbans"}
+MX_HP_ICON = "https://cdn.jsdelivr.net/gh/jdecked/twemoji@latest/assets/72x72/1f36f.png"
+MX_HP_PENDING = {"task": None}
 
 
 def mx_cfg() -> dict:
@@ -7358,7 +7329,6 @@ def mx_card(title: str, body: str, color: discord.Color = discord.Color.blurple(
     view.add_item(
         discord.ui.Container(
             discord.ui.TextDisplay(f"**{clip(title, 200)}**\n{clip(body, 3500)}"),
-            accent_color=color
         )
     )
     return view
@@ -7430,7 +7400,7 @@ def mx_choices(*names) -> list:
     return [discord.app_commands.Choice(name=n, value=n) for n in names]
 
 
-async def mx_punish(guild, member, kind: str, reason: str):
+async def mx_punish(guild, member, kind: str, reason: str, minutes: int = 60, role_id: int = 0):
     try:
         if kind == "ban":
             mark_action("ban", member.id)
@@ -7445,11 +7415,17 @@ async def mx_punish(guild, member, kind: str, reason: str):
             await member.kick(reason=reason)
         elif kind == "timeout":
             mark_action("timeout", member.id)
-            await member.timeout(discord.utils.utcnow() + timedelta(days=1), reason=reason)
+            await member.timeout(discord.utils.utcnow() + timedelta(minutes=minutes), reason=reason)
+        elif kind == "quarantine":
+            role = guild.get_role(role_id)
+            if role is None:
+                return "Quarantine role not found."
+            keep = [r for r in member.roles if not r.is_default() and (r.managed or r >= guild.me.top_role)]
+            await member.edit(roles=keep + [role], reason=reason)
         elif kind == "jail":
-            err_text = await mx_jail_member(guild, member, reason, bot.user)
-            if err_text:
-                return err_text
+            failure = await mx_jail_member(guild, member, reason, bot.user)
+            if failure:
+                return failure
         return None
     except Exception as e:
         return str(e)
@@ -7613,32 +7589,121 @@ async def mx_forcenick(ctx, member, nick):
     await log_mod(ctx.guild, "Force Nick", ctx.user, member, None, f"**Nickname:** {nick}")
 
 
-async def mx_honeypot(ctx, action: str, channel=None, punishment: str = "ban"):
+def mx_hp_notice(hp: dict) -> str:
+    kind = hp.get("punishment", "ban")
+    if kind == "timeout":
+        return f"a **{hp.get('minutes', 60)} minute timeout**"
+    return f"a **{kind}**"
+
+
+def mx_hp_view(hp: dict) -> discord.ui.LayoutView:
+    kind = hp.get("punishment", "ban")
+    section = discord.ui.Section(accessory=discord.ui.Thumbnail(media=MX_HP_ICON))
+    section.add_item(discord.ui.TextDisplay("## DO NOT SEND MESSAGES IN THIS CHANNEL"))
+    section.add_item(discord.ui.TextDisplay(f"This channel is used to catch spam bots. Any messages sent here will result in {mx_hp_notice(hp)}."))
+    view = discord.ui.LayoutView(timeout=None)
+    view.add_item(
+        discord.ui.Container(
+            section,
+            discord.ui.ActionRow(
+                discord.ui.Button(label=f"{MX_HP_LABELS.get(kind, 'Hits')}: {hp.get('count', 0)}", emoji="🍯", style=discord.ButtonStyle.secondary, disabled=True)
+            )
+        )
+    )
+    return view
+
+
+async def mx_hp_refresh():
+    await asyncio.sleep(3)
+    MX_HP_PENDING["task"] = None
+    hp = mx_cfg()["honeypot"]
+    guild = bot.get_guild(GUILD_ID)
+    if not hp or guild is None or not hp.get("message"):
+        return
+    channel = guild.get_channel(hp.get("channel", 0))
+    if channel is None:
+        return
+    try:
+        await channel.get_partial_message(hp["message"]).edit(view=mx_hp_view(hp))
+    except Exception:
+        pass
+
+
+def mx_hp_schedule():
+    if MX_HP_PENDING["task"] is None:
+        MX_HP_PENDING["task"] = asyncio.create_task(mx_hp_refresh())
+
+
+async def mx_honeypot(ctx, action: str, channel=None, punishment: str = None, minutes: int = None, role=None):
     if not mx_can(ctx.user, "manage_guild"):
         return await mx_deny(ctx)
     cfg = mx_cfg()
+    guild = ctx.guild
+    if action == "info":
+        body = (
+            f"`{PREFIX}honeypot setup #channel timeout [minutes]`: timeout whoever writes\n"
+            f"`{PREFIX}honeypot setup #channel quarantine @role`: strip all roles, add the quarantine role\n"
+            f"`{PREFIX}honeypot setup #channel kick` / `ban` / `softban`\n"
+            f"`{PREFIX}honeypot off`: disable · `{PREFIX}honeypot stats`: statistics"
+        )
+        return await ctx.send(mx_card("Honeypot", body))
+    old = cfg["honeypot"]
     if action == "off":
-        if not cfg["honeypot"]:
+        if not old:
             return await ctx.send(err("No honeypot is set."), ephemeral=True)
+        old_channel = guild.get_channel(old.get("channel", 0))
+        if old_channel is not None and old.get("message"):
+            try:
+                await old_channel.get_partial_message(old["message"]).delete()
+            except Exception:
+                pass
         cfg["honeypot"] = {}
         mx_save()
         return await ctx.send(ok("Honeypot Disabled", "The honeypot channel has been removed."))
-    if action == "status":
-        hp = cfg["honeypot"]
-        if not hp:
-            return await ctx.send(ok("Honeypot", "No honeypot is set."))
-        return await ctx.send(ok("Honeypot", f"**Channel:** <#{hp['channel']}>\n**Punishment:** {hp['punishment']}"))
-    if channel is None:
-        return await ctx.send(err("Provide a channel."), ephemeral=True)
-    if punishment not in MX_PUNISHMENTS:
-        return await ctx.send(err(f"Punishment must be one of: {', '.join(MX_PUNISHMENTS)}."), ephemeral=True)
-    cfg["honeypot"] = {"channel": channel.id, "punishment": punishment}
-    mx_save()
+    if action == "stats":
+        if not old:
+            return await ctx.send(ok("Honeypot Statistics", "No honeypot is set."))
+        kind = old.get("punishment", "ban")
+        lines = [f"**Channel:** <#{old['channel']}>", f"**Punishment:** {kind}"]
+        if kind == "timeout":
+            lines.append(f"**Duration:** {old.get('minutes', 60)} minute(s)")
+        if kind == "quarantine":
+            lines.append(f"**Quarantine role:** <@&{old.get('role', 0)}>")
+        lines.append(f"**{MX_HP_LABELS.get(kind, 'Hits')}:** {old.get('count', 0)}")
+        return await ctx.send(ok("Honeypot Statistics", "\n".join(lines)))
+    if channel is None or punishment not in MX_PUNISHMENTS:
+        return await mx_honeypot(ctx, "info")
+    minutes = clamp(minutes or 60, 1, 40320)
+    role_id = 0
+    if punishment == "quarantine":
+        if role is None:
+            return await ctx.send(err("Provide the quarantine role."), ephemeral=True)
+        problem = mx_role_error(guild, ctx.user, role)
+        if problem:
+            return await ctx.send(err(problem), ephemeral=True)
+        role_id = role.id
+    count = old.get("count", 0) if old.get("channel") == channel.id else 0
+    if old.get("message"):
+        old_channel = guild.get_channel(old.get("channel", 0))
+        if old_channel is not None:
+            try:
+                await old_channel.get_partial_message(old["message"]).delete()
+            except Exception:
+                pass
+    hp = {"channel": channel.id, "punishment": punishment, "minutes": minutes, "role": role_id, "count": count, "message": 0}
     try:
-        await channel.send(f"🍯 **Do not write in this channel.** Anyone who sends a message here will be punished automatically ({punishment}).")
+        notice = await channel.send(view=mx_hp_view(hp))
+        hp["message"] = notice.id
     except Exception:
-        pass
-    await ctx.send(ok("Honeypot Set", f"**Channel:** {channel.mention}\n**Punishment:** {punishment}\nStaff are exempt."))
+        return await ctx.send(err("I can't send messages in that channel."), ephemeral=True)
+    cfg["honeypot"] = hp
+    mx_save()
+    detail = f"**Channel:** {channel.mention}\n**Punishment:** {punishment}"
+    if punishment == "timeout":
+        detail += f"\n**Duration:** {minutes} minute(s)"
+    if punishment == "quarantine":
+        detail += f"\n**Quarantine role:** {role.mention}"
+    await ctx.send(ok("Honeypot Set", detail + "\nStaff are exempt."))
 
 
 async def mx_ignored(ctx, action: str, channel=None):
@@ -8284,10 +8349,14 @@ async def mx_message_hook(message) -> bool:
         except Exception:
             pass
         reason = "Honeypot triggered"
-        failure = await mx_punish(message.guild, member, hp.get("punishment", "ban"), reason)
+        failure = await mx_punish(message.guild, member, hp.get("punishment", "ban"), reason, hp.get("minutes", 60), hp.get("role", 0))
         extra = f"**Action:** {hp.get('punishment', 'ban')}\n**Channel:** {message.channel.mention}"
         if failure:
             extra += f"\n**Failed:** {clip(failure, 200)}"
+        else:
+            hp["count"] = hp.get("count", 0) + 1
+            mx_save()
+            mx_hp_schedule()
         await log_mod(message.guild, "Honeypot", bot.user, member, reason, extra)
         return True
     if message.content.startswith(PREFIX) and message.channel.id in cfg["ignored"] and not mx_super(member):
@@ -8496,14 +8565,17 @@ async def mxp_forcenick(ctx, message, args):
 
 
 async def mxp_honeypot(ctx, message, args):
-    sub = args[1].lower() if len(args) > 1 else "status"
-    if sub in ("off", "status"):
+    sub = args[1].lower() if len(args) > 1 else "info"
+    if sub in ("off", "stats"):
         return await mx_honeypot(ctx, sub)
-    channel = mx_first(mx_channels(message, args[1:]))
-    punishment = next((a.lower() for a in args if a.lower() in MX_PUNISHMENTS), "ban")
-    if channel is None:
-        return await ctx.send(err(f"Usage: `{PREFIX}honeypot set #channel [ban|softban|kick|timeout|jail]` | `{PREFIX}honeypot off` | `{PREFIX}honeypot status`"))
-    await mx_honeypot(ctx, "set", channel, punishment)
+    if sub != "setup":
+        return await mx_honeypot(ctx, "info")
+    rest = args[2:]
+    channel = mx_first([c for c in mx_channels(message, rest) if isinstance(c, discord.TextChannel)])
+    punishment = next((a.lower() for a in rest if a.lower() in MX_PUNISHMENTS), None)
+    minutes = next((int(a) for a in rest if a.isdigit() and len(a) < 6), None)
+    role = mx_first(mx_roles(message, rest))
+    await mx_honeypot(ctx, "setup", channel, punishment, minutes, role)
 
 
 async def mxp_ignoredchannels(ctx, message, args):
@@ -8769,17 +8841,19 @@ async def forcenick_slash(interaction: discord.Interaction, member: discord.Memb
 
 
 @tree.command(name="honeypot", description="Trap channel that punishes anyone who writes in it", guild=GUILD_OBJ)
-@discord.app_commands.describe(action="Set, remove or view the honeypot", channel="Honeypot channel", punishment="What happens to the offender")
-@discord.app_commands.choices(action=mx_choices("set", "off", "status"), punishment=mx_choices(*MX_PUNISHMENTS))
+@discord.app_commands.describe(action="Setup, disable, statistics or usage", channel="Honeypot channel", punishment="What happens to the offender", minutes="Timeout length in minutes", role="Quarantine role")
+@discord.app_commands.choices(action=mx_choices("setup", "off", "stats", "info"), punishment=mx_choices(*MX_PUNISHMENTS))
 @discord.app_commands.default_permissions(manage_guild=True)
 async def honeypot_slash(
     interaction: discord.Interaction,
     action: discord.app_commands.Choice[str],
     channel: discord.TextChannel = None,
-    punishment: discord.app_commands.Choice[str] = None
+    punishment: discord.app_commands.Choice[str] = None,
+    minutes: int = None,
+    role: discord.Role = None
 ):
     ctx = MxCtx(interaction)
-    await mx_guard(ctx, mx_honeypot(ctx, action.value, channel, punishment.value if punishment else "ban"))
+    await mx_guard(ctx, mx_honeypot(ctx, action.value, channel, punishment.value if punishment else None, minutes, role))
 
 
 @tree.command(name="ignoredchannels", description="Manage channels where bot commands are ignored", guild=GUILD_OBJ)
