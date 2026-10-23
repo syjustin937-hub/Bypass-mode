@@ -40,12 +40,10 @@ CONFIG_FILE = "config.json"
 API_URL = "https://doitenroi.win/api/bypass?url="
 REFERENCE_DIR = "reference_images"
 HASH_THRESHOLD = 10
-PREFIX = "."
+PREFIX = "!"
 
 if not TOKEN:
     raise ValueError("Missing TOKEN in .env")
-
-last_deleted = {}
 
 
 def load_config():
@@ -99,7 +97,6 @@ reference_hashes = load_reference_hashes()
 intents = discord.Intents.default()
 intents.message_content = True
 intents.members = True
-intents.presences = os.getenv("PRESENCE_INTENT", "").lower() in ("1", "true", "yes", "on")
 
 bot = discord.Client(intents=intents)
 tree = discord.app_commands.CommandTree(bot)
@@ -152,12 +149,12 @@ async def end_giveaway(msg_id: str, gw: dict):
     save_config(config)
     await message.edit(view=GiveawayEndedView(gw["prize"], winner_count, len(entries)))
     await channel.send(
-        f"🎉 Giveaway ended! **{gw['prize']}**\nWinner(s): {winner_text}",
+        f"Giveaway ended! **{gw['prize']}**\nWinner(s): {winner_text}",
         reference=message
     )
     await log_bot(
         channel.guild,
-        "🎉 Giveaway Ended",
+        "Giveaway Ended",
         f"**Prize:** {gw['prize']}\n**Channel:** {channel.mention}\n**Entries:** {len(entries)}\n**Winner(s):** {winner_text}",
         discord.Color.gold()
     )
@@ -249,7 +246,7 @@ class VerifyButton(discord.ui.Button):
 
 class GiveawayEnterButton(discord.ui.Button):
     def __init__(self, count: int = 0):
-        super().__init__(label=f"🎉 Enter ({count})", style=discord.ButtonStyle.primary, custom_id="giveaway_enter")
+        super().__init__(label=f"Enter ({count})", style=discord.ButtonStyle.primary, custom_id="giveaway_enter")
 
     async def callback(self, interaction: discord.Interaction):
         msg_id = str(interaction.message.id)
@@ -273,7 +270,7 @@ class GiveawayEnterButton(discord.ui.Button):
             save_config(config)
             count = len(gw["entries"])
             await interaction.message.edit(view=GiveawayActiveView(gw["prize"], gw["winner_count"], gw["end_timestamp"], count))
-            await interaction.response.send_message("You entered the giveaway! 🎉", ephemeral=True)
+            await interaction.response.send_message("You entered the giveaway!", ephemeral=True)
 
 
 class VerifyView(discord.ui.View):
@@ -294,8 +291,6 @@ HELP_PAGES = [
         "`.userinfo [@user]` View info about a user\n"
         "`.serverinfo` View info about this server\n"
         "`.roleinfo <role>` View info about a role\n"
-        "`.channelinfo [#channel]` View info about a channel\n"
-        "`.inviteinfo <invite>` Inspect a Discord invite\n"
         "`.avatar [@user]` Get a user's avatar\n"
         "`.banner [@user]` Get a user's banner\n"
         "`.botinfo` View bot information\n"
@@ -304,14 +299,7 @@ HELP_PAGES = [
     ),
     (
         "Tools",
-        "`.qr <text>` Generate a QR code\n"
-        "`.translate <lang> <text>` Translate text\n"
-        "`.color <hex|rgb|name>` Info about a color\n"
-        "`.math <expression>` Evaluate math\n"
-        "`.timestamp [time]` Discord timestamp formats\n"
-        "`.snipe` Last deleted message\n"
         "`.afk [reason]` Set your AFK status\n"
-        "`.urban <word>` Urban Dictionary lookup\n"
         "`.steal <emoji>` Copy a custom emoji\n"
         "`.stealsticker` Copy a sticker (reply to it)"
     ),
@@ -330,34 +318,6 @@ HELP_PAGES = [
         "`.counting setup #channel` Counting game\n"
         "`.todo` Your personal todo list\n"
         "`.help` Show this menu"
-    ),
-    (
-        "Network & Dev",
-        "`.diff <a> | <b>` Difference between two texts\n"
-        "`.dns <domain> [type]` DNS records\n"
-        "`.entropy <text>` Password strength estimate\n"
-        "`.expand <link>` Unshorten a URL\n"
-        "`.hash <text>` Hash with common algorithms\n"
-        "`.httpstatus <code>` What an HTTP code means\n"
-        "`.iban <iban>` Validate an IBAN\n"
-        "`.ip <ip|domain>` IP geolocation\n"
-        "`.json <json>` Validate and pretty-print JSON\n"
-        "`.jwt <token>` Decode a JWT"
-    ),
-    (
-        "Text & Web Tools",
-        "`.lorem [n] [words|sentences|paragraphs]` Placeholder text\n"
-        "`.morse <encode|decode> <text>` Morse code\n"
-        "`.password [length]` Secure password sent by DM\n"
-        "`.regex <pattern> | <text>` Test a regex\n"
-        "`.rot13 <text>` ROT13\n"
-        "`.slugify <text>` URL-friendly slug\n"
-        "`.sslcheck <domain>` TLS certificate and expiry\n"
-        "`.urlencode <encode|decode> <text>` Percent-encoding\n"
-        "`.useragent <string>` Parse a user agent\n"
-        "`.uuid [count]` Random UUIDs (v4)\n"
-        "`.whois <domain>` Domain registration info\n"
-        "`.wordcount <text>` Count words and characters"
     ),
     (
         "Moderation",
@@ -390,37 +350,17 @@ HELP_PAGES = [
         "`.softban @user [reason]` `.restrict @user` `.picperms @user [#channel]`\n"
         "`.forcenick @user <nickname|off>` `.honeypot setup #channel <timeout|quarantine|kick|ban|softban>`\n"
         "`.masspurge @user [limit]` `.moveall #voice`\n\n"
-        "**AutoMod**\n"
-        "`.modules` `.automod` Open the AutoMod panel\n"
-        "`.automod <on|off|action|mute|addword|removeword|words|log|filter|exempt>`\n\n"
         "**Staff Tools**\n"
         "`.modmail <setup|off|status|reply|close|block|unblock>`\n"
         "`.modnote <add|view|remove> @user` `.modstats [days]`\n"
-        "`.ignoredchannels <add|remove|list> [#channel]`\n"
-        "`.suggest <text>` `.suggestions <setup|off|status|approve|deny>`\n\n"
+        "`.ignoredchannels <add|remove|list> [#channel]`\n\n"
         "Every command also works as a slash command"
     ),
     (
-        "Economy",
-        "`.balance [@user]` `.daily` `.weekly` `.work` `.beg` `.crime`\n"
-        "`.rob @user` `.fish` `.mine` `.coinflip <bet> <h/t>` `.scatter <bet>`\n"
-        "`.deposit <amt|all>` `.withdraw <amt|all>` `.give @user <amt>`\n"
-        "`.shop` `.buy <item> [qty]` `.sell <item> [qty]` `.inventory`\n"
-        "`.leaderboard`\n\n"
-        "**Admin**\n"
-        "`.addcoins` `.removecoins` `.setcoins` `.resetcoins`"
-    ),
-    (
-        "Security & Logs",
-        "**Security (Admin)**\n"
-        "`.security` `.security setup [#logchannel]` `.panic <on|off>`\n"
-        "`.lockdown` `.unlockdown`\n"
-        "`.antiraid` `.antinuke` `.antispam` `.antilink` `.antimention` `<on|off>`\n"
-        "`.whitelist <add|remove|list> [@user]` (owner only)\n"
-        "Fine-tune with `/security <module>`\n\n"
+        "Logs",
         "**Logs (Admin)**\n"
         "`.logs` `.setlog <category|all> #channel` `.dellog <category|all>`\n"
-        "Categories: `mod` `message` `member` `voice` `server` `bot` `security`"
+        "Categories: `mod` `message` `member` `voice` `server` `bot`"
     ),
     (
         "Giveaway, Ticket & Auto Responder",
@@ -447,9 +387,8 @@ HELP_PAGES = [
 
 
 HELP_CATEGORIES = [
-    ("Moderation", ["Moderation", "Moderation Plus", "Security & Logs"]),
-    ("Utility", ["Information", "Tools", "Network & Dev", "Text & Web Tools"]),
-    ("Economy", ["Economy"]),
+    ("Moderation", ["Moderation", "Moderation Plus", "Logs"]),
+    ("Utility", ["Information", "Tools"]),
     ("Server Setup", ["Welcome", "Giveaway, Ticket & Auto Responder"]),
     ("More", ["More"]),
 ]
@@ -516,7 +455,7 @@ class AfkSetView(discord.ui.LayoutView):
         super().__init__(timeout=None)
         self.add_item(
             discord.ui.Container(
-                discord.ui.TextDisplay("# 😴 You are now AFK"),
+                discord.ui.TextDisplay("# You are now AFK"),
                 discord.ui.Separator(),
                 discord.ui.TextDisplay(
                     f"**User:** {member.mention}\n"
@@ -531,7 +470,7 @@ class AfkReturnView(discord.ui.LayoutView):
         super().__init__(timeout=None)
         self.add_item(
             discord.ui.Container(
-                discord.ui.TextDisplay(f"# 👋 Welcome back, {member.display_name}!"),
+                discord.ui.TextDisplay(f"# Welcome back, {member.display_name}!"),
                 discord.ui.Separator(),
                 discord.ui.TextDisplay("Your AFK status has been removed."),
             )
@@ -543,41 +482,12 @@ class AfkMentionView(discord.ui.LayoutView):
         super().__init__(timeout=None)
         self.add_item(
             discord.ui.Container(
-                discord.ui.TextDisplay(f"# 😴 {member.display_name} is AFK"),
+                discord.ui.TextDisplay(f"# {member.display_name} is AFK"),
                 discord.ui.Separator(),
                 discord.ui.TextDisplay(
                     f"**Reason:** {reason}\n"
                     f"**Since:** <t:{timestamp}:R>"
                 ),
-            )
-        )
-
-
-class SnipeView(discord.ui.LayoutView):
-    def __init__(self, data: dict):
-        super().__init__(timeout=None)
-        content = data["content"] if data.get("content") else "(no text content)"
-        self.add_item(
-            discord.ui.Container(
-                discord.ui.TextDisplay("# 🔍 Sniped Message"),
-                discord.ui.Separator(),
-                discord.ui.TextDisplay(
-                    f"**Author:** {data['author_name']}\n"
-                    f"**Sent:** <t:{data['timestamp']}:R>\n\n"
-                    f"{content}"
-                ),
-            )
-        )
-
-
-class SnipeEmptyView(discord.ui.LayoutView):
-    def __init__(self):
-        super().__init__(timeout=None)
-        self.add_item(
-            discord.ui.Container(
-                discord.ui.TextDisplay("# 🔍 Snipe"),
-                discord.ui.Separator(),
-                discord.ui.TextDisplay("No recently deleted messages in this channel."),
             )
         )
 
@@ -588,7 +498,7 @@ class VerifyEphemeralView(discord.ui.LayoutView):
         if state == "success":
             self.add_item(
                 discord.ui.Container(
-                    discord.ui.TextDisplay("# ✅ You have been verified!"),
+                    discord.ui.TextDisplay("# You have been verified!"),
                     discord.ui.Separator(),
                     discord.ui.TextDisplay(message),
                 )
@@ -869,7 +779,7 @@ class GiveawayActiveView(discord.ui.LayoutView):
         super().__init__(timeout=None)
         self.add_item(
             discord.ui.Container(
-                discord.ui.TextDisplay("# 🎉 GIVEAWAY"),
+                discord.ui.TextDisplay("# GIVEAWAY"),
                 discord.ui.Separator(),
                 discord.ui.TextDisplay(
                     f"**Prize:** {prize}\n"
@@ -888,7 +798,7 @@ class GiveawayEndedView(discord.ui.LayoutView):
         super().__init__(timeout=None)
         self.add_item(
             discord.ui.Container(
-                discord.ui.TextDisplay("# 🎉 GIVEAWAY ENDED"),
+                discord.ui.TextDisplay("# GIVEAWAY ENDED"),
                 discord.ui.Separator(),
                 discord.ui.TextDisplay(
                     f"**Prize:** {prize}\n"
@@ -964,105 +874,6 @@ async def steal_emoji(guild: discord.Guild, text: str, reason: str) -> discord.u
         return InfoView("Failed!", str(e), discord.Color.red())
 
 
-SCATTER_SYMBOLS = ["🍒", "🍋", "🔔", "💎", "7️⃣"]
-SCATTER_WEIGHTS = [30, 25, 20, 15, 10]
-SCATTER_PAYOUT = {"🍒": 3, "🍋": 4, "🔔": 6, "💎": 10, "7️⃣": 25}
-STARTING_COINS = 1000
-COIN = "🪙"
-
-SHOP = {
-    "padlock": {"name": "Padlock", "emoji": "🔒", "price": 1500, "desc": "Blocks the next robbery against you (single use)."},
-    "clover": {"name": "Lucky Clover", "emoji": "🍀", "price": 2000, "desc": "+15% success on your next crime/rob (single use)."},
-    "laptop": {"name": "Laptop", "emoji": "💻", "price": 8000, "desc": "+50% earnings from work (permanent)."},
-    "fishing_rod": {"name": "Fishing Rod", "emoji": "🎣", "price": 2500, "desc": "Lets you use fish (permanent)."},
-    "pickaxe": {"name": "Pickaxe", "emoji": "⛏️", "price": 3500, "desc": "Lets you use mine (permanent)."},
-}
-PERMANENT = {"laptop", "fishing_rod", "pickaxe"}
-
-COOLDOWNS = {
-    "daily": 86400,
-    "weekly": 604800,
-    "work": 1800,
-    "beg": 60,
-    "crime": 900,
-    "rob": 1800,
-    "fish": 120,
-    "mine": 180,
-}
-
-JOBS = [
-    ("coded a Discord bot", 200, 450),
-    ("delivered food around the city", 150, 350),
-    ("fixed someone's PC", 250, 500),
-    ("streamed on Twitch", 100, 600),
-    ("did freelance design work", 200, 400),
-    ("tutored a student online", 180, 380),
-]
-
-BEG_PEOPLE = ["Mang Tomas", "Aling Nena", "a kind stranger", "a jeepney driver", "a random tourist"]
-
-FISH_TABLE = [
-    ("an old boot", 0, 20, 25),
-    ("a Tilapia", 80, 180, 35),
-    ("a Bangus", 150, 300, 22),
-    ("a Tuna", 300, 600, 12),
-    ("a treasure chest", 1000, 2000, 6),
-]
-
-ORE_TABLE = [
-    ("some plain rocks", 0, 30, 30),
-    ("Coal", 80, 200, 30),
-    ("Iron", 200, 400, 22),
-    ("Gold", 500, 900, 12),
-    ("a Diamond", 1500, 2500, 6),
-]
-
-ECO_ALIASES = {
-    "bal": "balance", "dep": "deposit", "with": "withdraw", "pay": "give",
-    "lb": "leaderboard", "top": "leaderboard", "inv": "inventory",
-    "cf": "coinflip", "flip": "coinflip",
-}
-
-MENTION_RE = re.compile(r"<@!?\d+>")
-
-
-def get_balance(uid: int) -> int:
-    return config.get("coins", {}).get(str(uid), STARTING_COINS)
-
-
-def set_balance(uid: int, amount: int):
-    config.setdefault("coins", {})[str(uid)] = amount
-    save_config(config)
-
-
-def scatter_result(uid: int, bet: int) -> discord.ui.LayoutView:
-    balance = get_balance(uid)
-    if bet <= 0:
-        return FailedView("Bet must be at least 1.")
-    if bet > balance:
-        return FailedView(f"Not enough coins. Balance: **{balance}**")
-    reels = random.choices(SCATTER_SYMBOLS, weights=SCATTER_WEIGHTS, k=3)
-    top = max(reels.count(s) for s in reels)
-    if top == 3:
-        net = bet * (SCATTER_PAYOUT[reels[0]] - 1)
-        title, color = "🎰 Scatter — WIN", discord.Color.green()
-    elif top == 2:
-        net = 0
-        title, color = "🎰 Scatter — PUSH", discord.Color.blurple()
-    else:
-        net = -bet
-        title, color = "🎰 Scatter — LOSE", discord.Color.red()
-    new_balance = balance + net
-    set_balance(uid, new_balance)
-    body = (
-        f"## {' | '.join(reels)}\n"
-        f"**Bet:** {bet}\n"
-        f"**Net:** {net:+}\n"
-        f"**Balance:** {new_balance}"
-    )
-    return InfoView(title, body, color)
-
-
 def err(msg: str) -> discord.ui.LayoutView:
     return InfoView("Failed!", msg, discord.Color.red())
 
@@ -1071,526 +882,28 @@ def ok(title: str, body: str) -> discord.ui.LayoutView:
     return InfoView(title, body, discord.Color.green())
 
 
-def fmt_time(s: int) -> str:
-    d, r = divmod(int(s), 86400)
-    h, r = divmod(r, 3600)
-    m, sec = divmod(r, 60)
-    parts = []
-    if d:
-        parts.append(f"{d}d")
-    if h:
-        parts.append(f"{h}h")
-    if m:
-        parts.append(f"{m}m")
-    if sec or not parts:
-        parts.append(f"{sec}s")
-    return " ".join(parts)
-
-
-def parse_amount(s: str, maximum: int):
-    s = s.lower().replace(",", "").strip()
-    if s == "all":
-        return maximum
-    if s == "half":
-        return maximum // 2
-    m = re.fullmatch(r"(\d+(?:\.\d+)?)([km]?)", s)
-    if not m:
-        return None
-    mult = {"": 1, "k": 1000, "m": 1000000}[m.group(2)]
-    return int(float(m.group(1)) * mult)
-
-
-def wallet(uid) -> int:
-    return config.get("coins", {}).get(str(uid), STARTING_COINS)
-
-
-def bank(uid) -> int:
-    return config.get("bank", {}).get(str(uid), 0)
-
-
-def set_wallet(uid, amt):
-    config.setdefault("coins", {})[str(uid)] = max(0, int(amt))
-
-
-def set_bank(uid, amt):
-    config.setdefault("bank", {})[str(uid)] = max(0, int(amt))
-
-
-def inv(uid) -> dict:
-    return config.setdefault("inventory", {}).setdefault(str(uid), {})
-
-
-def has_item(uid, item) -> bool:
-    return inv(uid).get(item, 0) > 0
-
-
-def add_item(uid, item, n=1):
-    d = inv(uid)
-    d[item] = d.get(item, 0) + n
-
-
-def take_item(uid, item, n=1):
-    d = inv(uid)
-    d[item] = d.get(item, 0) - n
-    if d[item] <= 0:
-        d.pop(item, None)
-
-
-def cooldown_left(uid, name) -> int:
-    last = config.get("cooldowns", {}).get(str(uid), {}).get(name, 0)
-    return max(0, int(last + COOLDOWNS[name] - time.time()))
-
-
-def start_cooldown(uid, name):
-    config.setdefault("cooldowns", {}).setdefault(str(uid), {})[name] = time.time()
-
-
-def cd_view(name, left):
-    ready = int(time.time()) + left
-    return InfoView(
-        "Slow down!",
-        f"`{name}` is on cooldown. Try again <t:{ready}:R> (**{fmt_time(left)}**).",
-        discord.Color.orange()
-    )
-
-
-def transfer(from_id, to_id, amt):
-    set_wallet(from_id, wallet(from_id) - amt)
-    set_wallet(to_id, wallet(to_id) + amt)
-
-
-def balance_view(member):
-    w, b = wallet(member.id), bank(member.id)
-    return InfoView(
-        f"💰 {member.display_name}'s Balance",
-        f"**Wallet:** {w:,} {COIN}\n**Bank:** {b:,} {COIN}\n**Net Worth:** {w + b:,} {COIN}"
-    )
-
-
-def daily_view(user):
-    left = cooldown_left(user.id, "daily")
-    if left:
-        return cd_view("daily", left)
-    now = int(time.time())
-    st = config.setdefault("streaks", {}).get(str(user.id), {"count": 0, "last": 0})
-    st["count"] = st["count"] + 1 if now - st["last"] <= 172800 else 1
-    st["last"] = now
-    config["streaks"][str(user.id)] = st
-    reward = 500 + min(st["count"], 30) * 50
-    set_wallet(user.id, wallet(user.id) + reward)
-    start_cooldown(user.id, "daily")
-    save_config(config)
-    return ok(
-        "🎁 Daily Reward",
-        f"You received **{reward:,}** {COIN}\n**Streak:** {st['count']} day(s) 🔥\n**Wallet:** {wallet(user.id):,} {COIN}"
-    )
-
-
-def weekly_view(user):
-    left = cooldown_left(user.id, "weekly")
-    if left:
-        return cd_view("weekly", left)
-    reward = 5000
-    set_wallet(user.id, wallet(user.id) + reward)
-    start_cooldown(user.id, "weekly")
-    save_config(config)
-    return ok("📅 Weekly Reward", f"You received **{reward:,}** {COIN}\n**Wallet:** {wallet(user.id):,} {COIN}")
-
-
-def work_view(user):
-    left = cooldown_left(user.id, "work")
-    if left:
-        return cd_view("work", left)
-    job, lo, hi = random.choice(JOBS)
-    pay = random.randint(lo, hi)
-    bonus = ""
-    if has_item(user.id, "laptop"):
-        pay = int(pay * 1.5)
-        bonus = "\n💻 Laptop bonus: +50%"
-    set_wallet(user.id, wallet(user.id) + pay)
-    start_cooldown(user.id, "work")
-    save_config(config)
-    return ok("💼 Work", f"You {job} and earned **{pay:,}** {COIN}{bonus}")
-
-
-def beg_view(user):
-    left = cooldown_left(user.id, "beg")
-    if left:
-        return cd_view("beg", left)
-    start_cooldown(user.id, "beg")
-    who = random.choice(BEG_PEOPLE)
-    if random.random() < 0.65:
-        amt = random.randint(20, 120)
-        set_wallet(user.id, wallet(user.id) + amt)
-        save_config(config)
-        return ok("🙏 Beg", f"{who} gave you **{amt:,}** {COIN}")
-    save_config(config)
-    return InfoView("🙏 Beg", f"{who} ignored you. Nothing this time.", discord.Color.orange())
-
-
-def crime_view(user):
-    left = cooldown_left(user.id, "crime")
-    if left:
-        return cd_view("crime", left)
-    chance = 0.50
-    note = ""
-    if has_item(user.id, "clover"):
-        take_item(user.id, "clover")
-        chance += 0.15
-        note = "\n🍀 Lucky Clover used (+15%)"
-    start_cooldown(user.id, "crime")
-    if random.random() < chance:
-        amt = random.randint(300, 900)
-        set_wallet(user.id, wallet(user.id) + amt)
-        save_config(config)
-        return ok("🦹 Crime — SUCCESS", f"You pulled it off and got **{amt:,}** {COIN}{note}")
-    fine = min(wallet(user.id), random.randint(150, 500))
-    set_wallet(user.id, wallet(user.id) - fine)
-    save_config(config)
-    return InfoView("🚔 Crime — CAUGHT", f"You got caught and paid a fine of **{fine:,}** {COIN}{note}", discord.Color.red())
-
-
-def rob_view(robber, victim):
-    if victim.bot or victim.id == robber.id:
-        return err("You can't rob that user.")
-    left = cooldown_left(robber.id, "rob")
-    if left:
-        return cd_view("rob", left)
-    if wallet(robber.id) < 200:
-        return err("You need at least **200** coins in your wallet to attempt a robbery.")
-    if wallet(victim.id) < 200:
-        return err(f"{victim.display_name} doesn't have enough in their wallet to be worth robbing.")
-    start_cooldown(robber.id, "rob")
-    if has_item(victim.id, "padlock"):
-        take_item(victim.id, "padlock")
-        fine = min(wallet(robber.id), 300)
-        transfer(robber.id, victim.id, fine)
-        save_config(config)
-        return InfoView(
-            "🔒 Robbery Blocked",
-            f"{victim.mention} had a Padlock! You paid **{fine:,}** {COIN} in damages.",
-            discord.Color.red()
-        )
-    chance = 0.40
-    note = ""
-    if has_item(robber.id, "clover"):
-        take_item(robber.id, "clover")
-        chance += 0.15
-        note = "\n🍀 Lucky Clover used (+15%)"
-    if random.random() < chance:
-        amt = max(1, int(wallet(victim.id) * random.uniform(0.10, 0.30)))
-        transfer(victim.id, robber.id, amt)
-        save_config(config)
-        return ok("🥷 Robbery — SUCCESS", f"You stole **{amt:,}** {COIN} from {victim.mention}!{note}")
-    fine = max(1, int(wallet(robber.id) * random.uniform(0.10, 0.20)))
-    transfer(robber.id, victim.id, fine)
-    save_config(config)
-    return InfoView(
-        "🚔 Robbery — FAILED",
-        f"You got caught and paid **{fine:,}** {COIN} to {victim.mention}.{note}",
-        discord.Color.red()
-    )
-
-
-def deposit_view(user, raw):
-    amt = parse_amount(raw, wallet(user.id))
-    if amt is None or amt <= 0:
-        return err("Enter a valid amount (number, `all`, `half`, or `5k`).")
-    if amt > wallet(user.id):
-        return err(f"You only have **{wallet(user.id):,}** {COIN} in your wallet.")
-    set_wallet(user.id, wallet(user.id) - amt)
-    set_bank(user.id, bank(user.id) + amt)
-    save_config(config)
-    return ok("🏦 Deposited", f"Deposited **{amt:,}** {COIN}\n**Wallet:** {wallet(user.id):,}\n**Bank:** {bank(user.id):,}")
-
-
-def withdraw_view(user, raw):
-    amt = parse_amount(raw, bank(user.id))
-    if amt is None or amt <= 0:
-        return err("Enter a valid amount (number, `all`, `half`, or `5k`).")
-    if amt > bank(user.id):
-        return err(f"You only have **{bank(user.id):,}** {COIN} in your bank.")
-    set_bank(user.id, bank(user.id) - amt)
-    set_wallet(user.id, wallet(user.id) + amt)
-    save_config(config)
-    return ok("🏦 Withdrawn", f"Withdrew **{amt:,}** {COIN}\n**Wallet:** {wallet(user.id):,}\n**Bank:** {bank(user.id):,}")
-
-
-def give_view(sender, receiver, raw):
-    if receiver.bot or receiver.id == sender.id:
-        return err("You can't give coins to that user.")
-    amt = parse_amount(raw, wallet(sender.id))
-    if amt is None or amt <= 0:
-        return err("Enter a valid amount.")
-    if amt > wallet(sender.id):
-        return err(f"You only have **{wallet(sender.id):,}** {COIN} in your wallet.")
-    transfer(sender.id, receiver.id, amt)
-    save_config(config)
-    return ok("💸 Transfer Complete", f"{sender.mention} gave **{amt:,}** {COIN} to {receiver.mention}")
-
-
-def leaderboard_view(guild):
-    ids = set(config.get("coins", {})) | set(config.get("bank", {}))
-    rows = []
-    for i in ids:
-        if guild and guild.get_member(int(i)) is None:
-            continue
-        rows.append((wallet(i) + bank(i), i))
-    rows.sort(reverse=True)
-    rows = rows[:10]
-    if not rows:
-        return InfoView("🏆 Leaderboard", "No one is on the board yet.")
-    medals = ["🥇", "🥈", "🥉"]
-    lines = []
-    for n, (total, i) in enumerate(rows):
-        rank = medals[n] if n < 3 else f"**{n + 1}.**"
-        lines.append(f"{rank} <@{i}> — **{total:,}** {COIN}")
-    return InfoView("🏆 Richest Members", "\n".join(lines), discord.Color.gold())
-
-
-def shop_view():
-    lines = []
-    for k, v in SHOP.items():
-        lines.append(f"{v['emoji']} **{v['name']}** — {v['price']:,} {COIN}\n{v['desc']}\n`id: {k}`")
-    lines.append("Buy with `.buy <item> [qty]` or `/buy`")
-    return InfoView("🛒 Shop", "\n\n".join(lines), discord.Color.gold())
-
-
-def resolve_item(text):
-    t = text.lower().strip().replace("-", "_").replace(" ", "_")
-    for k, v in SHOP.items():
-        if t == k or t == v["name"].lower().replace(" ", "_"):
-            return k
-    return None
-
-
-def buy_view(user, key, qty):
-    if key not in SHOP:
-        return err("Unknown item. Check `.shop` for the list.")
-    item = SHOP[key]
-    if key in PERMANENT:
-        if has_item(user.id, key):
-            return err(f"You already own a {item['name']}.")
-        qty = 1
-    qty = max(1, min(qty, 100))
-    cost = item["price"] * qty
-    if cost > wallet(user.id):
-        return err(f"You need **{cost:,}** {COIN} but only have **{wallet(user.id):,}** in your wallet.")
-    set_wallet(user.id, wallet(user.id) - cost)
-    add_item(user.id, key, qty)
-    save_config(config)
-    return ok("🛒 Purchase Complete", f"Bought **{qty}× {item['emoji']} {item['name']}** for **{cost:,}** {COIN}")
-
-
-def sell_view(user, key, qty):
-    if key not in SHOP:
-        return err("Unknown item.")
-    item = SHOP[key]
-    qty = max(1, qty)
-    owned = inv(user.id).get(key, 0)
-    if owned < qty:
-        return err(f"You only own **{owned}** of {item['name']}.")
-    gain = (item["price"] // 2) * qty
-    take_item(user.id, key, qty)
-    set_wallet(user.id, wallet(user.id) + gain)
-    save_config(config)
-    return ok("💱 Sold", f"Sold **{qty}× {item['emoji']} {item['name']}** for **{gain:,}** {COIN} (50% value)")
-
-
-def inventory_view(user):
-    items = inv(user.id)
-    if not items:
-        return InfoView(f"🎒 {user.display_name}'s Inventory", "Your inventory is empty. Visit the `.shop`!")
-    lines = [f"{SHOP[k]['emoji']} **{SHOP[k]['name']}** × {n}" for k, n in items.items() if k in SHOP]
-    return InfoView(f"🎒 {user.display_name}'s Inventory", "\n".join(lines) or "Empty.")
-
-
-def weighted_reward(table):
-    name, lo, hi, _ = random.choices(table, weights=[t[3] for t in table], k=1)[0]
-    return name, random.randint(lo, hi)
-
-
-def fish_view(user):
-    if not has_item(user.id, "fishing_rod"):
-        return err("You need a 🎣 Fishing Rod. Buy one with `.buy fishing_rod`.")
-    left = cooldown_left(user.id, "fish")
-    if left:
-        return cd_view("fish", left)
-    name, amt = weighted_reward(FISH_TABLE)
-    set_wallet(user.id, wallet(user.id) + amt)
-    start_cooldown(user.id, "fish")
-    save_config(config)
-    return ok("🎣 Fishing", f"You caught {name} worth **{amt:,}** {COIN}")
-
-
-def mine_view(user):
-    if not has_item(user.id, "pickaxe"):
-        return err("You need a ⛏️ Pickaxe. Buy one with `.buy pickaxe`.")
-    left = cooldown_left(user.id, "mine")
-    if left:
-        return cd_view("mine", left)
-    name, amt = weighted_reward(ORE_TABLE)
-    set_wallet(user.id, wallet(user.id) + amt)
-    start_cooldown(user.id, "mine")
-    save_config(config)
-    return ok("⛏️ Mining", f"You mined {name} worth **{amt:,}** {COIN}")
-
-
-def coinflip_view(user, raw_bet, side):
-    side = {"h": "heads", "head": "heads", "heads": "heads", "t": "tails", "tail": "tails", "tails": "tails"}.get(side.lower())
-    if not side:
-        return err("Pick `heads` or `tails`.")
-    bet = parse_amount(raw_bet, wallet(user.id))
-    if bet is None or bet <= 0:
-        return err("Enter a valid bet.")
-    if bet > wallet(user.id):
-        return err(f"Not enough coins. Wallet: **{wallet(user.id):,}**")
-    result = random.choice(["heads", "tails"])
-    if result == side:
-        set_wallet(user.id, wallet(user.id) + bet)
-        save_config(config)
-        return ok("🪙 Coinflip — WIN", f"It landed on **{result}**! You won **{bet:,}** {COIN}\n**Wallet:** {wallet(user.id):,}")
-    set_wallet(user.id, wallet(user.id) - bet)
-    save_config(config)
-    return InfoView("🪙 Coinflip — LOSE", f"It landed on **{result}**. You lost **{bet:,}** {COIN}\n**Wallet:** {wallet(user.id):,}", discord.Color.red())
-
-
-def eco_admin_view(action, member, amount, moderator=None):
-    uid = member.id
-    if action == "add":
-        set_wallet(uid, wallet(uid) + amount)
-        text = f"Added **{amount:,}** {COIN} to {member.mention}"
-    elif action == "remove":
-        set_wallet(uid, wallet(uid) - amount)
-        text = f"Removed **{amount:,}** {COIN} from {member.mention}"
-    elif action == "set":
-        set_wallet(uid, amount)
-        text = f"Set {member.mention}'s wallet to **{amount:,}** {COIN}"
-    else:
-        set_wallet(uid, STARTING_COINS)
-        set_bank(uid, 0)
-        config.get("inventory", {}).pop(str(uid), None)
-        config.get("cooldowns", {}).pop(str(uid), None)
-        config.get("streaks", {}).pop(str(uid), None)
-        text = f"Reset {member.mention}'s economy data."
-    save_config(config)
-    if moderator is not None and getattr(member, "guild", None) is not None:
-        asyncio.create_task(log_bot(
-            member.guild,
-            "🛠️ Economy Admin",
-            f"**Moderator:** {fmt_ref(moderator)}\n**Target:** {fmt_ref(member)}\n{text}",
-            discord.Color.orange()
-        ))
-    return ok("🛠️ Economy Admin", text + f"\n**Wallet now:** {wallet(uid):,} {COIN}")
-
-
-SIMPLE_ECONOMY = {
-    "daily": ("Claim your daily reward", lambda u, g: daily_view(u)),
-    "weekly": ("Claim your weekly reward", lambda u, g: weekly_view(u)),
-    "work": ("Work to earn coins", lambda u, g: work_view(u)),
-    "beg": ("Beg for some coins", lambda u, g: beg_view(u)),
-    "crime": ("Commit a crime (risky!)", lambda u, g: crime_view(u)),
-    "fish": ("Go fishing (needs a Fishing Rod)", lambda u, g: fish_view(u)),
-    "mine": ("Go mining (needs a Pickaxe)", lambda u, g: mine_view(u)),
-    "shop": ("View the shop", lambda u, g: shop_view()),
-    "inventory": ("View your inventory", lambda u, g: inventory_view(u)),
-    "leaderboard": ("See the richest members", lambda u, g: leaderboard_view(g)),
-}
-
-
-async def economy_prefix(message, cmd, args) -> bool:
-    cmd = ECO_ALIASES.get(cmd, cmd)
-    author = message.author
-    send = message.channel.send
-    rest = [a for a in args[1:] if not MENTION_RE.fullmatch(a)]
-    target = message.mentions[0] if message.mentions else None
-
-    if cmd in SIMPLE_ECONOMY:
-        await send(view=SIMPLE_ECONOMY[cmd][1](author, message.guild))
-    elif cmd == "balance":
-        await send(view=balance_view(target or author))
-    elif cmd == "rob":
-        if not target:
-            await send(view=err("Usage: `.rob @user`"))
-        else:
-            await send(view=rob_view(author, target))
-    elif cmd == "deposit":
-        if not rest:
-            await send(view=err("Usage: `.deposit <amount|all>`"))
-        else:
-            await send(view=deposit_view(author, rest[0]))
-    elif cmd == "withdraw":
-        if not rest:
-            await send(view=err("Usage: `.withdraw <amount|all>`"))
-        else:
-            await send(view=withdraw_view(author, rest[0]))
-    elif cmd == "give":
-        if not target or not rest:
-            await send(view=err("Usage: `.give @user <amount>`"))
-        else:
-            await send(view=give_view(author, target, rest[0]))
-    elif cmd in ("buy", "sell"):
-        qty = 1
-        name_parts = rest
-        if name_parts and name_parts[-1].isdigit():
-            qty = int(name_parts[-1])
-            name_parts = name_parts[:-1]
-        key = resolve_item(" ".join(name_parts)) if name_parts else None
-        if not key:
-            await send(view=err(f"Usage: `.{cmd} <item> [qty]` — see `.shop` for item names."))
-        elif cmd == "buy":
-            await send(view=buy_view(author, key, qty))
-        else:
-            await send(view=sell_view(author, key, qty))
-    elif cmd == "coinflip":
-        if len(rest) < 2:
-            await send(view=err("Usage: `.coinflip <bet> <heads|tails>`"))
-        else:
-            await send(view=coinflip_view(author, rest[0], rest[1]))
-    elif cmd in ("addcoins", "removecoins", "setcoins", "resetcoins"):
-        if not author.guild_permissions.administrator:
-            return True
-        if not target:
-            usage = f"Usage: `.{cmd} @user`" if cmd == "resetcoins" else f"Usage: `.{cmd} @user <amount>`"
-            await send(view=err(usage))
-            return True
-        action = cmd.replace("coins", "")
-        if action == "reset":
-            await send(view=eco_admin_view("reset", target, 0, author))
-            return True
-        amount = parse_amount(rest[0], 0) if rest else None
-        if amount is None or amount < 0 or (action != "set" and amount == 0):
-            await send(view=err("Enter a valid amount."))
-        else:
-            await send(view=eco_admin_view(action, target, amount, author))
-    else:
-        return False
-    return True
-
-
 LOG_CATEGORIES = {
-    "mod": "🛡️ Moderation",
-    "message": "💬 Messages",
-    "member": "👤 Members",
-    "voice": "🔊 Voice",
-    "server": "🏠 Server",
-    "bot": "🤖 Bot & Economy",
-    "security": "🚨 Security",
+    "mod": "Moderation",
+    "message": "Messages",
+    "member": "Members",
+    "voice": "Voice",
+    "server": "Server",
+    "bot": "Bot",
 }
 
 ACTION_STYLE = {
-    "Kick": ("👢", discord.Color.orange()),
-    "Ban": ("🔨", discord.Color.red()),
-    "Unban": ("🔓", discord.Color.green()),
-    "Timeout": ("⏳", discord.Color.yellow()),
-    "Untimeout": ("⌛", discord.Color.green()),
-    "Warn": ("⚠️", discord.Color.yellow()),
-    "Clear Warns": ("🧹", discord.Color.green()),
-    "Purge": ("🗑️", discord.Color.blurple()),
-    "Lock": ("🔒", discord.Color.red()),
-    "Unlock": ("🔓", discord.Color.green()),
-    "Slowmode": ("🐢", discord.Color.blurple()),
-    "Auto Kick": ("🤖", discord.Color.red()),
+    "Kick": ("", discord.Color.orange()),
+    "Ban": ("", discord.Color.red()),
+    "Unban": ("", discord.Color.green()),
+    "Timeout": ("", discord.Color.yellow()),
+    "Untimeout": ("", discord.Color.green()),
+    "Warn": ("", discord.Color.yellow()),
+    "Clear Warns": ("", discord.Color.green()),
+    "Purge": ("", discord.Color.blurple()),
+    "Lock": ("", discord.Color.red()),
+    "Unlock": ("", discord.Color.green()),
+    "Slowmode": ("", discord.Color.blurple()),
+    "Auto Kick": ("", discord.Color.red()),
 }
 
 recent_actions = {}
@@ -1676,7 +989,7 @@ async def send_log(guild, category: str, view: discord.ui.LayoutView):
 
 async def log_mod(guild, action: str, moderator, target=None, reason=None, extra=None):
     mx_record(action, moderator)
-    icon, color = ACTION_STYLE.get(action, ("🛡️", discord.Color.blurple()))
+    icon, color = ACTION_STYLE.get(action, ("", discord.Color.blurple()))
     lines = [f"**Moderator:** {fmt_ref(moderator)}"]
     if target is not None:
         lines.append(f"**Target:** {fmt_ref(target)}")
@@ -1684,7 +997,7 @@ async def log_mod(guild, action: str, moderator, target=None, reason=None, extra
         lines.append(f"**Reason:** {clip(reason, 500)}")
     if extra:
         lines.append(extra)
-    await send_log(guild, "mod", LogView(f"{icon} {action}", "\n".join(lines), color))
+    await send_log(guild, "mod", LogView(action, "\n".join(lines), color))
 
 
 async def log_bot(guild, title: str, body: str, color: discord.Color = discord.Color.blurple()):
@@ -1702,7 +1015,7 @@ async def log_message_delete(message):
     if message.attachments:
         files = "\n".join(f"• {a.filename}" for a in message.attachments[:10])
         body += f"\n\n**Attachments**\n{clip(files, 500)}"
-    await send_log(message.guild, "message", LogView("🗑️ Message Deleted", body, discord.Color.red()))
+    await send_log(message.guild, "message", LogView("Message Deleted", body, discord.Color.red()))
 
 
 def logs_status_view(guild) -> discord.ui.LayoutView:
@@ -1713,7 +1026,7 @@ def logs_status_view(guild) -> discord.ui.LayoutView:
         ch = guild.get_channel(cid) if cid else None
         lines.append(f"{label} (`{key}`) — {ch.mention if ch else '`Off`'}")
     lines.append("\nSet with `/logs set` or `.setlog <category|all> #channel`")
-    return InfoView("📋 Log Channels", "\n".join(lines))
+    return InfoView("Log Channels", "\n".join(lines))
 
 
 async def apply_log_channel(category: str, channel) -> discord.ui.LayoutView:
@@ -1723,7 +1036,7 @@ async def apply_log_channel(category: str, channel) -> discord.ui.LayoutView:
     label = "all" if category == "all" else LOG_CATEGORIES[category]
     try:
         await channel.send(
-            view=LogView("✅ Log Channel Set", f"This channel will now receive **{label}** logs.", discord.Color.green()),
+            view=LogView("Log Channel Set", f"This channel will now receive **{label}** logs.", discord.Color.green()),
             allowed_mentions=NO_MENTIONS
         )
     except Exception:
@@ -1733,7 +1046,7 @@ async def apply_log_channel(category: str, channel) -> discord.ui.LayoutView:
     for key in targets:
         cfg[key] = channel.id
     save_config(config)
-    return ok("📋 Log Channel Updated", f"**{label}** logs → {channel.mention}")
+    return ok("Log Channel Updated", f"**{label}** logs → {channel.mention}")
 
 
 def disable_log_channel(category: str) -> discord.ui.LayoutView:
@@ -1746,7 +1059,7 @@ def disable_log_channel(category: str) -> discord.ui.LayoutView:
         cfg.pop(key, None)
     save_config(config)
     label = "all" if category == "all" else LOG_CATEGORIES[category]
-    return ok("📋 Logging Disabled", f"**{label}** logs are now off.")
+    return ok("Logging Disabled", f"**{label}** logs are now off.")
 
 
 async def logs_prefix(message, cmd, args) -> bool:
@@ -1771,74 +1084,6 @@ async def logs_prefix(message, cmd, args) -> bool:
     return True
 
 
-SEC_DEFAULTS = {
-    "antiraid": {"enabled": False, "threshold": 5, "window": 10, "duration": 300, "action": "kick", "min_age_days": 0, "panic": False},
-    "antinuke": {"enabled": False, "limit": 3, "member_limit": 5, "window": 30, "action": "strip", "recover": True, "guard_perms": True},
-    "antispam": {"enabled": False, "messages": 6, "window": 5, "timeout_minutes": 10},
-    "antilink": {"enabled": False, "invites": True, "links": False, "timeout_minutes": 0},
-    "antimention": {"enabled": False, "limit": 5, "timeout_minutes": 10},
-}
-
-SEC_LABELS = {
-    "antiraid": ("🚧", "Anti-Raid"),
-    "antinuke": ("☢️", "Anti-Nuke"),
-    "antispam": ("💬", "Anti-Spam"),
-    "antilink": ("🔗", "Anti-Link"),
-    "antimention": ("📣", "Anti-Mass-Mention"),
-}
-
-SEC_RANGES = {
-    "threshold": (2, 50),
-    "window": (2, 300),
-    "duration": (30, 3600),
-    "min_age_days": (0, 365),
-    "limit": (1, 20),
-    "member_limit": (1, 50),
-    "messages": (3, 30),
-    "timeout_minutes": (0, 40320),
-}
-
-MODULE_PERMS = {
-    "antiraid": {"kick_members": "Kick Members", "ban_members": "Ban Members", "moderate_members": "Timeout Members"},
-    "antinuke": {"view_audit_log": "View Audit Log", "ban_members": "Ban Members", "kick_members": "Kick Members",
-                 "manage_roles": "Manage Roles", "manage_channels": "Manage Channels", "manage_webhooks": "Manage Webhooks"},
-    "antispam": {"manage_messages": "Manage Messages", "moderate_members": "Timeout Members"},
-    "antilink": {"manage_messages": "Manage Messages"},
-    "antimention": {"manage_messages": "Manage Messages", "moderate_members": "Timeout Members"},
-}
-
-DANGEROUS_PERMS = ("administrator", "manage_guild", "manage_roles", "manage_channels", "ban_members", "kick_members", "manage_webhooks")
-
-NUKE_GROUPS = {
-    "channel_create": "structure", "channel_delete": "structure",
-    "role_create": "structure", "role_delete": "structure",
-    "webhook_create": "structure", "ban": "members", "kick": "members",
-}
-
-NUKE_LABELS = {
-    "channel_create": "channel(s) created", "channel_delete": "channel(s) deleted",
-    "role_create": "role(s) created", "role_delete": "role(s) deleted",
-    "webhook_create": "webhook(s) created", "ban": "member(s) banned", "kick": "member(s) kicked",
-}
-
-INVITE_RE = re.compile(r"(?:discord\.gg|discord(?:app)?\.com/invite|dsc\.gg)/[\w-]+", re.I)
-LINK_RE = re.compile(r"https?://\S+|www\.\S+", re.I)
-
-raid_state = {"joins": deque(), "active_until": 0.0, "count": 0}
-spam_tracker = {}
-nuke_records = {}
-nuke_punished = {}
-seen_audit = set()
-
-
-def sec_cfg(name: str) -> dict:
-    store = config.setdefault("security", {})
-    cfg = store.setdefault(name, {})
-    for key, value in SEC_DEFAULTS[name].items():
-        cfg.setdefault(key, value)
-    return cfg
-
-
 def whitelist_ids() -> list:
     return config.setdefault("security", {}).setdefault("whitelist", [])
 
@@ -1853,543 +1098,6 @@ def is_trusted(guild, user_id: int) -> bool:
 
 def clamp(value: int, low: int, high: int) -> int:
     return max(low, min(high, value))
-
-
-def missing_perms(guild, perms: dict) -> str:
-    me = guild.me.guild_permissions if guild.me else None
-    if me is None:
-        return ""
-    missing = [label for attr, label in perms.items() if not getattr(me, attr)]
-    if not missing:
-        return ""
-    return "\n⚠️ Bot is missing: " + ", ".join(missing)
-
-
-def describe_module(name: str) -> str:
-    cfg = sec_cfg(name)
-    if name == "antiraid":
-        text = f"{cfg['threshold']} joins in {cfg['window']}s → raid mode for {fmt_time(cfg['duration'])}, action: **{cfg['action']}**"
-        if cfg["min_age_days"]:
-            text += f"\nAccounts younger than **{cfg['min_age_days']}** day(s) are actioned"
-        if cfg["panic"]:
-            text += "\n🚨 **Panic mode is ON**"
-        return text
-    if name == "antinuke":
-        return (
-            f"Limit: **{cfg['limit']}** channel/role/webhook actions or **{cfg['member_limit']}** bans/kicks per {cfg['window']}s\n"
-            f"Punishment: **{cfg['action']}** • Recovery: **{'on' if cfg['recover'] else 'off'}** • "
-            f"Permission guard: **{'on' if cfg['guard_perms'] else 'off'}**"
-        )
-    if name == "antispam":
-        return f"{cfg['messages']} messages in {cfg['window']}s → timeout **{cfg['timeout_minutes']}** minute(s)"
-    if name == "antilink":
-        return f"Invites: **{'blocked' if cfg['invites'] else 'allowed'}** • Links: **{'blocked' if cfg['links'] else 'allowed'}**"
-    return f"{cfg['limit']}+ mentions in one message → timeout **{cfg['timeout_minutes']}** minute(s)"
-
-
-def security_status_view(guild) -> discord.ui.LayoutView:
-    lines = []
-    for name, (emoji, label) in SEC_LABELS.items():
-        cfg = sec_cfg(name)
-        state = "✅ On" if cfg["enabled"] else "❌ Off"
-        lines.append(f"{emoji} **{label}** — {state}\n{describe_module(name)}")
-    ids = whitelist_ids()
-    wl = " ".join(f"<@{i}>" for i in ids) if ids else "none"
-    lines.append(f"🤝 **Whitelist:** {clip(wl, 500)}\n-# Server owner and this bot are always trusted")
-    needed = {}
-    for perms in MODULE_PERMS.values():
-        needed.update(perms)
-    note = missing_perms(guild, needed)
-    if note:
-        lines.append(note.strip())
-    return InfoView("🛡️ Security Status", "\n\n".join(lines))
-
-
-def update_module(guild, name: str, enabled: bool, **opts) -> discord.ui.LayoutView:
-    cfg = sec_cfg(name)
-    cfg["enabled"] = enabled
-    for key, value in opts.items():
-        if value is None:
-            continue
-        if key in SEC_RANGES:
-            value = clamp(int(value), *SEC_RANGES[key])
-        cfg[key] = value
-    save_config(config)
-    emoji, label = SEC_LABELS[name]
-    note = missing_perms(guild, MODULE_PERMS[name]) if enabled else ""
-    return ok(f"{emoji} {label}", f"{label} is now **{'enabled' if enabled else 'disabled'}**.\n{describe_module(name)}{note}")
-
-
-def panic_view(enabled: bool) -> discord.ui.LayoutView:
-    cfg = sec_cfg("antiraid")
-    cfg["panic"] = enabled
-    if not enabled:
-        raid_state["active_until"] = 0.0
-        raid_state["joins"].clear()
-    save_config(config)
-    if enabled:
-        return InfoView("🚨 Panic Mode ON", f"Every new member will be **{cfg['action']}ed** until you turn it off with `/security panic` or `.panic off`.", discord.Color.red())
-    return ok("✅ Panic Mode OFF", "New members can join normally again.")
-
-
-def whitelist_view(guild, action: str, member) -> discord.ui.LayoutView:
-    ids = whitelist_ids()
-    if action == "list":
-        text = "\n".join(f"<@{i}> (`{i}`)" for i in ids) if ids else "No whitelisted users."
-        return InfoView("🤝 Security Whitelist", text + "\n\n-# Server owner and this bot are always trusted")
-    if member is None:
-        return err("Mention a member.")
-    if action == "add":
-        if member.id not in ids:
-            ids.append(member.id)
-            save_config(config)
-        return ok("🤝 Whitelist Updated", f"{member.mention} is now trusted by the security system.")
-    if member.id in ids:
-        ids.remove(member.id)
-        save_config(config)
-    return ok("🤝 Whitelist Updated", f"{member.mention} removed from the whitelist.")
-
-
-async def send_security(guild, title: str, body: str, color: discord.Color = discord.Color.red(), ping: bool = True):
-    if guild is None or guild.id != GUILD_ID:
-        return
-    cfg = config.get("log_channels", {})
-    channel_id = cfg.get("security") or cfg.get("mod")
-    channel = guild.get_channel(channel_id) if channel_id else None
-    if channel is None:
-        return
-    mentions = NO_MENTIONS
-    text = body
-    if ping and guild.owner_id:
-        mentions = discord.AllowedMentions(everyone=False, roles=False, users=[discord.Object(id=guild.owner_id)])
-        text = f"{body}\n\n<@{guild.owner_id}>"
-    try:
-        await channel.send(view=LogView(title, text, color), allowed_mentions=mentions)
-    except Exception as e:
-        print(f"Security alert failed: {e}")
-
-
-def raid_active() -> bool:
-    return sec_cfg("antiraid")["panic"] or time.time() < raid_state["active_until"]
-
-
-async def raid_punish(member, reason: str) -> bool:
-    cfg = sec_cfg("antiraid")
-    action = cfg["action"]
-    try:
-        if action == "ban":
-            mark_action("ban", member.id)
-            await member.ban(reason=f"AntiRaid: {reason}")
-        elif action == "timeout":
-            mark_action("timeout", member.id)
-            await member.timeout(discord.utils.utcnow() + timedelta(hours=1), reason=f"AntiRaid: {reason}")
-        else:
-            mark_action("kick", member.id)
-            await member.kick(reason=f"AntiRaid: {reason}")
-    except Exception as e:
-        print(f"Raid punish failed: {e}")
-        return False
-    raid_state["count"] += 1
-    return True
-
-
-async def antiraid_on_join(member):
-    cfg = sec_cfg("antiraid")
-    guild = member.guild
-    if guild.id != GUILD_ID or member.bot or not (cfg["enabled"] or cfg["panic"]):
-        return
-    if is_trusted(guild, member.id):
-        return
-    now = time.time()
-    joins = raid_state["joins"]
-    joins.append((now, member.id))
-    while joins and now - joins[0][0] > cfg["window"]:
-        joins.popleft()
-    if cfg["enabled"] and len(joins) >= cfg["threshold"] and not raid_active():
-        raid_state["active_until"] = now + cfg["duration"]
-        raid_state["count"] = 0
-        ids = [mid for _, mid in joins]
-        joins.clear()
-        await send_security(
-            guild,
-            "🚨 Raid Detected",
-            f"**{len(ids)}** members joined within **{cfg['window']}s**.\n"
-            f"**Raid mode:** active for {fmt_time(cfg['duration'])}\n**Action:** {cfg['action']}"
-        )
-        for mid in ids:
-            target = guild.get_member(mid)
-            if target:
-                await raid_punish(target, "Raid detected")
-        await send_security(guild, "🛡️ Raid Response", f"Actioned **{raid_state['count']}** member(s) with **{cfg['action']}**.", discord.Color.orange(), ping=False)
-        return
-    reason = None
-    if raid_active():
-        reason = "Panic mode" if cfg["panic"] else "Raid mode active"
-    elif cfg["enabled"] and cfg["min_age_days"]:
-        age = (discord.utils.utcnow() - member.created_at).days
-        if age < cfg["min_age_days"]:
-            reason = f"Account is {age} day(s) old (minimum {cfg['min_age_days']})"
-    if reason and await raid_punish(member, reason):
-        total = raid_state["count"]
-        if total <= 10 or total % 10 == 0:
-            await send_security(
-                guild,
-                "🚧 Anti-Raid",
-                f"**User:** {fmt_ref(member)}\n**Reason:** {reason}\n**Action:** {cfg['action']}",
-                discord.Color.orange(),
-                ping=False
-            )
-
-
-async def find_audit_retry(guild, action, target_id):
-    entry = await find_audit(guild, action, target_id, within=10)
-    if entry is None:
-        await asyncio.sleep(1.5)
-        entry = await find_audit(guild, action, target_id, within=12)
-    return entry
-
-
-def snapshot_channel(channel) -> dict:
-    return {
-        "name": channel.name,
-        "type": channel.type,
-        "category_id": getattr(channel, "category_id", None),
-        "overwrites": dict(channel.overwrites),
-        "topic": getattr(channel, "topic", None),
-        "nsfw": getattr(channel, "nsfw", False),
-        "slowmode": getattr(channel, "slowmode_delay", 0),
-        "bitrate": getattr(channel, "bitrate", 64000),
-        "user_limit": getattr(channel, "user_limit", 0),
-    }
-
-
-def snapshot_role(role) -> dict:
-    try:
-        member_ids = [m.id for m in role.members][:50]
-    except Exception:
-        member_ids = []
-    return {
-        "name": role.name,
-        "colour": role.colour,
-        "permissions": role.permissions,
-        "hoist": role.hoist,
-        "mentionable": role.mentionable,
-        "members": member_ids,
-    }
-
-
-async def recreate_channel(guild, snap: dict):
-    category = guild.get_channel(snap["category_id"]) if snap.get("category_id") else None
-    overwrites = {t: o for t, o in snap["overwrites"].items() if guild.get_role(t.id) or guild.get_member(t.id)}
-    reason = "AntiNuke: restoring deleted channel"
-    if snap["type"] == discord.ChannelType.category:
-        return await guild.create_category(snap["name"], overwrites=overwrites, reason=reason)
-    if snap["type"] in (discord.ChannelType.voice, discord.ChannelType.stage_voice):
-        return await guild.create_voice_channel(
-            snap["name"], category=category, overwrites=overwrites,
-            bitrate=min(snap["bitrate"], guild.bitrate_limit), user_limit=snap["user_limit"], reason=reason
-        )
-    return await guild.create_text_channel(
-        snap["name"], category=category, overwrites=overwrites, topic=snap.get("topic"),
-        nsfw=snap.get("nsfw", False), slowmode_delay=snap.get("slowmode", 0), reason=reason
-    )
-
-
-async def recreate_role(guild, snap: dict):
-    role = await guild.create_role(
-        name=snap["name"], colour=snap["colour"], permissions=snap["permissions"],
-        hoist=snap["hoist"], mentionable=snap["mentionable"], reason="AntiNuke: restoring deleted role"
-    )
-    for member_id in snap.get("members", []):
-        target = guild.get_member(member_id)
-        if target:
-            try:
-                await target.add_roles(role, reason="AntiNuke: restoring role members")
-            except Exception:
-                pass
-    return role
-
-
-async def nuke_recover(guild, records: list) -> str:
-    restored = removed = failed = 0
-    for _, kind, data in records:
-        try:
-            if kind == "channel_delete" and data:
-                await recreate_channel(guild, data)
-                restored += 1
-            elif kind == "role_delete" and data:
-                await recreate_role(guild, data)
-                restored += 1
-            elif kind == "ban" and data:
-                await guild.unban(discord.Object(id=data), reason="AntiNuke: reverting mass ban")
-                restored += 1
-            elif kind == "channel_create" and data:
-                channel = guild.get_channel(data)
-                if channel:
-                    await channel.delete(reason="AntiNuke: removing channel created during attack")
-                    removed += 1
-            elif kind == "role_create" and data:
-                role = guild.get_role(data)
-                if role:
-                    await role.delete(reason="AntiNuke: removing role created during attack")
-                    removed += 1
-            elif kind == "webhook_create" and data:
-                for webhook in await guild.webhooks():
-                    if webhook.id == data:
-                        await webhook.delete(reason="AntiNuke: removing webhook created during attack")
-                        removed += 1
-        except Exception:
-            failed += 1
-    if not (restored or removed or failed):
-        return "nothing to restore"
-    return f"restored {restored}, removed {removed}, failed {failed}"
-
-
-async def apply_punish(guild, actor_id: int, action: str, reason: str) -> str:
-    member = guild.get_member(actor_id)
-    order = [action] + [a for a in ("ban", "kick", "strip") if a != action]
-    for method in order:
-        try:
-            if method == "ban":
-                mark_action("ban", actor_id)
-                await guild.ban(discord.Object(id=actor_id), reason=reason)
-                return "banned"
-            if method == "kick":
-                if member is None:
-                    continue
-                mark_action("kick", actor_id)
-                await member.kick(reason=reason)
-                return "kicked"
-            if member is None:
-                continue
-            roles = [r for r in member.roles if not r.is_default() and not r.managed and r < guild.me.top_role]
-            if not roles:
-                return "no manageable roles to strip"
-            await member.remove_roles(*roles, reason=reason)
-            return f"stripped {len(roles)} role(s)"
-        except Exception:
-            continue
-    return "failed (bot role is too low?)"
-
-
-async def nuke_punish(guild, actor_id: int, records: list, title: str, extra: str = ""):
-    cfg = sec_cfg("antinuke")
-    nuke_punished[actor_id] = time.time()
-    actor = guild.get_member(actor_id)
-    counts = Counter(kind for _, kind, _ in records)
-    summary = "\n".join(f"• {n} {NUKE_LABELS[k]}" for k, n in counts.items())
-    outcome = await apply_punish(guild, actor_id, cfg["action"], f"AntiNuke: {title}")
-    recovered = ""
-    if cfg["recover"] and records:
-        recovered = f"\n**Recovery:** {await nuke_recover(guild, records)}"
-    who = fmt_ref(actor) if actor else f"<@{actor_id}> (`{actor_id}`)"
-    body = f"**Offender:** {who}\n**Reason:** {title}"
-    if summary:
-        body += f"\n{summary}"
-    if extra:
-        body += f"\n{extra}"
-    body += f"\n**Punishment:** {outcome}{recovered}"
-    await send_security(guild, "☢️ Anti-Nuke Triggered", body)
-
-
-async def nuke_record(guild, kind: str, entry, data=None):
-    cfg = sec_cfg("antinuke")
-    if entry.user is None:
-        return
-    actor_id = entry.user.id
-    if is_trusted(guild, actor_id):
-        return
-    now = time.time()
-    if now - nuke_punished.get(actor_id, 0) < 60:
-        if cfg["recover"]:
-            await nuke_recover(guild, [(now, kind, data)])
-        return
-    group = NUKE_GROUPS[kind]
-    dq = nuke_records.setdefault((actor_id, group), deque())
-    dq.append((now, kind, data))
-    while dq and now - dq[0][0] > cfg["window"]:
-        dq.popleft()
-    limit = cfg["limit"] if group == "structure" else cfg["member_limit"]
-    if len(dq) >= limit:
-        records = list(dq)
-        dq.clear()
-        await nuke_punish(guild, actor_id, records, f"Mass action: {len(records)} in {cfg['window']}s")
-
-
-async def nuke_track(guild, kind: str, audit_action, target_id: int, data=None):
-    if not sec_cfg("antinuke")["enabled"] or guild.id != GUILD_ID:
-        return
-    entry = await find_audit_retry(guild, audit_action, target_id)
-    if entry is not None:
-        await nuke_record(guild, kind, entry, data)
-
-
-def has_dangerous(perms) -> bool:
-    return any(getattr(perms, p) for p in DANGEROUS_PERMS)
-
-
-async def antinuke_role_update_guard(before, after):
-    cfg = sec_cfg("antinuke")
-    guild = after.guild
-    if not cfg["enabled"] or not cfg["guard_perms"] or guild.id != GUILD_ID or after.managed:
-        return
-    gained = [p for p in DANGEROUS_PERMS if getattr(after.permissions, p) and not getattr(before.permissions, p)]
-    if not gained:
-        return
-    entry = await find_audit_retry(guild, discord.AuditLogAction.role_update, after.id)
-    if entry is None or entry.user is None or is_trusted(guild, entry.user.id):
-        return
-    reverted = "reverted"
-    try:
-        await after.edit(permissions=before.permissions, reason="AntiNuke: unauthorized dangerous permission grant")
-    except Exception:
-        reverted = "could not revert"
-    names = ", ".join(p.replace("_", " ") for p in gained)
-    await nuke_punish(guild, entry.user.id, [], "Unauthorized dangerous permission grant", f"**Role:** {after.mention}\n**Permissions:** {names} ({reverted})")
-
-
-async def antinuke_member_role_guard(member, added: list):
-    cfg = sec_cfg("antinuke")
-    guild = member.guild
-    if not cfg["enabled"] or not cfg["guard_perms"] or guild.id != GUILD_ID:
-        return
-    risky = [r for r in added if not r.managed and has_dangerous(r.permissions)]
-    if not risky:
-        return
-    entry = await find_audit_retry(guild, discord.AuditLogAction.member_role_update, member.id)
-    if entry is None or entry.user is None or is_trusted(guild, entry.user.id):
-        return
-    removed = "removed"
-    try:
-        await member.remove_roles(*risky, reason="AntiNuke: unauthorized dangerous role grant")
-    except Exception:
-        removed = "could not remove"
-    names = " ".join(r.mention for r in risky)
-    await nuke_punish(guild, entry.user.id, [], "Unauthorized dangerous role grant", f"**Target:** {fmt_ref(member)}\n**Roles:** {names} ({removed})")
-
-
-async def antinuke_bot_add(member):
-    cfg = sec_cfg("antinuke")
-    guild = member.guild
-    if not member.bot or not cfg["enabled"] or guild.id != GUILD_ID:
-        return
-    entry = await find_audit_retry(guild, discord.AuditLogAction.bot_add, member.id)
-    if entry is None or entry.user is None or is_trusted(guild, entry.user.id):
-        return
-    kicked = "kicked"
-    try:
-        mark_action("kick", member.id)
-        await member.kick(reason="AntiNuke: bot added by an untrusted user")
-    except Exception:
-        kicked = "could not kick"
-    await nuke_punish(guild, entry.user.id, [], "Added a bot without permission", f"**Bot:** {fmt_ref(member)} ({kicked})")
-
-
-async def security_prefix(message, cmd, args) -> bool:
-    modules = ("antiraid", "antinuke", "antispam", "antilink", "antimention")
-    if cmd not in modules + ("security", "panic", "whitelist", "lockdown", "unlockdown"):
-        return False
-    author = message.author
-    if not author.guild_permissions.administrator:
-        return True
-    send = message.channel.send
-    sub = args[1].lower() if len(args) > 1 else ""
-    on_words = ("on", "enable", "true", "yes")
-    off_words = ("off", "disable", "false", "no")
-    if cmd == "security":
-        if sub == "setup":
-            await send(view=security_setup_view(message.guild))
-            channel = message.channel_mentions[0] if message.channel_mentions else None
-            if channel is not None:
-                await send(view=await apply_log_channel("security", channel))
-        else:
-            await send(view=security_status_view(message.guild))
-    elif cmd == "lockdown":
-        await send(view=ok("🔒 Lockdown Started", "Locking every text channel for @everyone..."))
-        count = await do_lockdown(message.guild, f"Lockdown by {author}")
-        await send_security(message.guild, "🔒 Server Lockdown", f"**By:** {fmt_ref(author)}\n**Channels locked:** {count}", discord.Color.red(), ping=False)
-        await send(view=ok("🔒 Lockdown Active", f"Locked **{count}** channel(s). Use `.unlockdown` to restore."))
-    elif cmd == "unlockdown":
-        await send(view=ok("🔓 Unlocking", "Restoring channel permissions..."))
-        count = await undo_lockdown(message.guild)
-        await send_security(message.guild, "🔓 Lockdown Ended", f"**By:** {fmt_ref(author)}\n**Channels restored:** {count}", discord.Color.green(), ping=False)
-        await send(view=ok("🔓 Lockdown Ended", f"Restored **{count}** channel(s)."))
-    elif cmd == "panic":
-        if sub in on_words:
-            await send(view=panic_view(True))
-        elif sub in off_words:
-            await send(view=panic_view(False))
-        else:
-            await send(view=err("Usage: `.panic <on|off>`"))
-    elif cmd == "whitelist":
-        if author.id != message.guild.owner_id:
-            await send(view=err("Only the server owner can manage the whitelist."))
-        elif sub not in ("add", "remove", "list"):
-            await send(view=err("Usage: `.whitelist <add|remove|list> [@user]`"))
-        else:
-            target = message.mentions[0] if message.mentions else None
-            await send(view=whitelist_view(message.guild, sub, target))
-    else:
-        if sub in on_words:
-            await send(view=update_module(message.guild, cmd, True))
-        elif sub in off_words:
-            await send(view=update_module(message.guild, cmd, False))
-        else:
-            await send(view=err(f"Usage: `.{cmd} <on|off>` — fine-tune with `/security {cmd}`"))
-    return True
-
-
-async def do_lockdown(guild, reason: str) -> int:
-    saved = config.setdefault("security", {}).setdefault("lockdown_channels", {})
-    default = guild.default_role
-    count = 0
-    for ch in guild.text_channels:
-        ow = ch.overwrites_for(default)
-        key = str(ch.id)
-        if key not in saved:
-            saved[key] = ow.send_messages
-        if ow.send_messages is False:
-            continue
-        ow.send_messages = False
-        try:
-            await ch.set_permissions(default, overwrite=ow, reason=reason)
-            count += 1
-        except Exception as e:
-            print(f"Lockdown failed for {ch.id}: {e}")
-        await asyncio.sleep(0.4)
-    save_config(config)
-    return count
-
-
-async def undo_lockdown(guild) -> int:
-    saved = config.setdefault("security", {}).setdefault("lockdown_channels", {})
-    default = guild.default_role
-    count = 0
-    for key, original in list(saved.items()):
-        ch = guild.get_channel(int(key))
-        if ch is None:
-            continue
-        ow = ch.overwrites_for(default)
-        ow.send_messages = original
-        try:
-            if ow.is_empty():
-                await ch.set_permissions(default, overwrite=None, reason="Lockdown ended")
-            else:
-                await ch.set_permissions(default, overwrite=ow, reason="Lockdown ended")
-            count += 1
-        except Exception as e:
-            print(f"Unlock failed for {key}: {e}")
-        await asyncio.sleep(0.4)
-    config["security"]["lockdown_channels"] = {}
-    save_config(config)
-    return count
-
-
-def security_setup_view(guild) -> discord.ui.LayoutView:
-    for name in SEC_DEFAULTS:
-        sec_cfg(name)["enabled"] = True
-    save_config(config)
-    return security_status_view(guild)
 
 
 GUILD_OBJ = discord.Object(id=GUILD_ID)
@@ -2637,15 +1345,6 @@ async def afk_cmd(interaction: discord.Interaction, reason: str = "AFK"):
     await interaction.response.send_message(view=AfkSetView(interaction.user, reason))
 
 
-@tree.command(name="snipe", description="View the last deleted message in this channel", guild=discord.Object(id=GUILD_ID))
-async def snipe_cmd(interaction: discord.Interaction):
-    data = last_deleted.get(interaction.channel.id)
-    if not data:
-        await interaction.response.send_message(view=SnipeEmptyView())
-    else:
-        await interaction.response.send_message(view=SnipeView(data))
-
-
 @tree.command(name="avatar", description="View a user's avatar", guild=discord.Object(id=GUILD_ID))
 @discord.app_commands.describe(member="Member to view avatar of")
 async def avatar_cmd(interaction: discord.Interaction, member: discord.Member = None):
@@ -2662,111 +1361,6 @@ async def steal_cmd(interaction: discord.Interaction, emoji: str):
     await interaction.response.defer(ephemeral=True)
     view = await steal_emoji(interaction.guild, emoji, f"Stolen by {interaction.user}")
     await interaction.followup.send(view=view, ephemeral=True)
-
-
-@tree.command(name="scatter", description="Play scatter slots with virtual coins", guild=discord.Object(id=GUILD_ID))
-@discord.app_commands.describe(bet="Coins to bet")
-async def scatter_cmd(interaction: discord.Interaction, bet: int):
-    await interaction.response.send_message(view=scatter_result(interaction.user.id, bet))
-
-
-def register_simple_economy(name, desc, fn):
-    async def cb(interaction: discord.Interaction):
-        await interaction.response.send_message(view=fn(interaction.user, interaction.guild))
-    tree.command(name=name, description=desc, guild=GUILD_OBJ)(cb)
-
-
-for _name, (_desc, _fn) in SIMPLE_ECONOMY.items():
-    register_simple_economy(_name, _desc, _fn)
-
-ITEM_CHOICES = [discord.app_commands.Choice(name=v["name"], value=k) for k, v in SHOP.items()]
-
-
-@tree.command(name="balance", description="Check your (or someone's) balance", guild=GUILD_OBJ)
-@discord.app_commands.describe(member="Member to check")
-async def balance_cmd(interaction: discord.Interaction, member: discord.Member = None):
-    await interaction.response.send_message(view=balance_view(member or interaction.user))
-
-
-@tree.command(name="rob", description="Try to rob another member's wallet", guild=GUILD_OBJ)
-@discord.app_commands.describe(member="Who to rob")
-async def rob_cmd(interaction: discord.Interaction, member: discord.Member):
-    await interaction.response.send_message(view=rob_view(interaction.user, member))
-
-
-@tree.command(name="deposit", description="Deposit coins into your bank", guild=GUILD_OBJ)
-@discord.app_commands.describe(amount="Amount, or all / half / 5k")
-async def deposit_cmd(interaction: discord.Interaction, amount: str):
-    await interaction.response.send_message(view=deposit_view(interaction.user, amount))
-
-
-@tree.command(name="withdraw", description="Withdraw coins from your bank", guild=GUILD_OBJ)
-@discord.app_commands.describe(amount="Amount, or all / half / 5k")
-async def withdraw_cmd(interaction: discord.Interaction, amount: str):
-    await interaction.response.send_message(view=withdraw_view(interaction.user, amount))
-
-
-@tree.command(name="give", description="Give coins to another member", guild=GUILD_OBJ)
-@discord.app_commands.describe(member="Who to give coins to", amount="Amount, or all / half / 5k")
-async def give_cmd(interaction: discord.Interaction, member: discord.Member, amount: str):
-    await interaction.response.send_message(view=give_view(interaction.user, member, amount))
-
-
-@tree.command(name="buy", description="Buy an item from the shop", guild=GUILD_OBJ)
-@discord.app_commands.describe(item="Item to buy", amount="How many (default 1)")
-@discord.app_commands.choices(item=ITEM_CHOICES)
-async def buy_cmd(interaction: discord.Interaction, item: discord.app_commands.Choice[str], amount: int = 1):
-    await interaction.response.send_message(view=buy_view(interaction.user, item.value, amount))
-
-
-@tree.command(name="sell", description="Sell an item for 50% of its price", guild=GUILD_OBJ)
-@discord.app_commands.describe(item="Item to sell", amount="How many (default 1)")
-@discord.app_commands.choices(item=ITEM_CHOICES)
-async def sell_cmd(interaction: discord.Interaction, item: discord.app_commands.Choice[str], amount: int = 1):
-    await interaction.response.send_message(view=sell_view(interaction.user, item.value, amount))
-
-
-@tree.command(name="coinflip", description="Flip a coin and double your bet", guild=GUILD_OBJ)
-@discord.app_commands.describe(bet="Amount, or all / half / 5k", side="Heads or tails")
-@discord.app_commands.choices(side=[
-    discord.app_commands.Choice(name="Heads", value="heads"),
-    discord.app_commands.Choice(name="Tails", value="tails")
-])
-async def coinflip_cmd(interaction: discord.Interaction, bet: str, side: discord.app_commands.Choice[str]):
-    await interaction.response.send_message(view=coinflip_view(interaction.user, bet, side.value))
-
-
-@tree.command(name="addcoins", description="[Admin] Add coins to a member", guild=GUILD_OBJ)
-@discord.app_commands.default_permissions(administrator=True)
-async def addcoins_cmd(interaction: discord.Interaction, member: discord.Member, amount: int):
-    if amount <= 0:
-        await interaction.response.send_message(view=err("Amount must be positive."), ephemeral=True)
-        return
-    await interaction.response.send_message(view=eco_admin_view("add", member, amount, interaction.user))
-
-
-@tree.command(name="removecoins", description="[Admin] Remove coins from a member", guild=GUILD_OBJ)
-@discord.app_commands.default_permissions(administrator=True)
-async def removecoins_cmd(interaction: discord.Interaction, member: discord.Member, amount: int):
-    if amount <= 0:
-        await interaction.response.send_message(view=err("Amount must be positive."), ephemeral=True)
-        return
-    await interaction.response.send_message(view=eco_admin_view("remove", member, amount, interaction.user))
-
-
-@tree.command(name="setcoins", description="[Admin] Set a member's wallet", guild=GUILD_OBJ)
-@discord.app_commands.default_permissions(administrator=True)
-async def setcoins_cmd(interaction: discord.Interaction, member: discord.Member, amount: int):
-    if amount < 0:
-        await interaction.response.send_message(view=err("Amount can't be negative."), ephemeral=True)
-        return
-    await interaction.response.send_message(view=eco_admin_view("set", member, amount, interaction.user))
-
-
-@tree.command(name="resetcoins", description="[Admin] Reset a member's economy data", guild=GUILD_OBJ)
-@discord.app_commands.default_permissions(administrator=True)
-async def resetcoins_cmd(interaction: discord.Interaction, member: discord.Member):
-    await interaction.response.send_message(view=eco_admin_view("reset", member, 0, interaction.user))
 
 
 verify_group = discord.app_commands.Group(
@@ -2828,7 +1422,7 @@ async def giveaway_start(interaction: discord.Interaction, channel: discord.Text
     await interaction.response.send_message(view=GiveawayStartedView(channel, prize, end_ts), ephemeral=True)
     await log_bot(
         interaction.guild,
-        "🎉 Giveaway Started",
+        "Giveaway Started",
         f"**By:** {fmt_ref(interaction.user)}\n**Channel:** {channel.mention}\n**Prize:** {prize}\n**Winners:** {winners}\n**Ends:** <t:{end_ts}:R>",
         discord.Color.gold()
     )
@@ -2873,13 +1467,13 @@ async def giveaway_reroll(interaction: discord.Interaction, message_id: str):
     if channel:
         try:
             original = await channel.fetch_message(int(message_id))
-            await channel.send(f"🎉 Giveaway rerolled! **{gw['prize']}**\nNew winner(s): {winner_text}", reference=original)
+            await channel.send(f"Giveaway rerolled! **{gw['prize']}**\nNew winner(s): {winner_text}", reference=original)
         except Exception:
             pass
     await interaction.response.send_message(view=GiveawayRerollView(picked), ephemeral=True)
     await log_bot(
         interaction.guild,
-        "🎉 Giveaway Rerolled",
+        "Giveaway Rerolled",
         f"**By:** {fmt_ref(interaction.user)}\n**Prize:** {gw['prize']}\n**New winner(s):** {winner_text}",
         discord.Color.gold()
     )
@@ -2928,207 +1522,11 @@ async def logs_status(interaction: discord.Interaction):
 
 tree.add_command(logs_group)
 
-security_group = discord.app_commands.Group(
-    name="security",
-    description="Security system (anti-raid, anti-nuke, automod)",
-    guild_ids=[GUILD_ID],
-    default_permissions=discord.Permissions(administrator=True)
-)
-
-SEC_ACTION_RAID = [
-    discord.app_commands.Choice(name="Kick", value="kick"),
-    discord.app_commands.Choice(name="Ban", value="ban"),
-    discord.app_commands.Choice(name="Timeout (1h)", value="timeout"),
-]
-SEC_ACTION_NUKE = [
-    discord.app_commands.Choice(name="Strip roles", value="strip"),
-    discord.app_commands.Choice(name="Kick", value="kick"),
-    discord.app_commands.Choice(name="Ban", value="ban"),
-]
-
-
-async def deny_unless_admin(interaction: discord.Interaction) -> bool:
-    if interaction.user.guild_permissions.administrator:
-        return False
-    await interaction.response.send_message(view=err("Administrator permission required."), ephemeral=True)
-    return True
-
-
-@security_group.command(name="status", description="Show the security system status")
-async def sec_status(interaction: discord.Interaction):
-    if await deny_unless_admin(interaction):
-        return
-    await interaction.response.send_message(view=security_status_view(interaction.guild), ephemeral=True)
-
-
-@security_group.command(name="antiraid", description="Configure anti-raid")
-@discord.app_commands.describe(
-    enabled="Turn anti-raid on or off",
-    threshold="Joins within the window that trigger raid mode",
-    seconds="Join-detection window in seconds",
-    action="What to do with raiders",
-    min_account_age="Action accounts younger than this many days (0 = off)",
-    duration="How long raid mode lasts in seconds"
-)
-@discord.app_commands.choices(action=SEC_ACTION_RAID)
-async def sec_antiraid(
-    interaction: discord.Interaction,
-    enabled: bool,
-    threshold: int = None,
-    seconds: int = None,
-    action: discord.app_commands.Choice[str] = None,
-    min_account_age: int = None,
-    duration: int = None
-):
-    if await deny_unless_admin(interaction):
-        return
-    view = update_module(
-        interaction.guild, "antiraid", enabled,
-        threshold=threshold, window=seconds, action=action.value if action else None,
-        min_age_days=min_account_age, duration=duration
-    )
-    await interaction.response.send_message(view=view, ephemeral=True)
-
-
-@security_group.command(name="panic", description="Instantly action every new member until turned off")
-@discord.app_commands.describe(enabled="Panic mode on or off")
-async def sec_panic(interaction: discord.Interaction, enabled: bool):
-    if await deny_unless_admin(interaction):
-        return
-    await interaction.response.send_message(view=panic_view(enabled), ephemeral=True)
-
-
-@security_group.command(name="antinuke", description="Configure anti-nuke")
-@discord.app_commands.describe(
-    enabled="Turn anti-nuke on or off",
-    limit="Channel/role/webhook actions allowed per window",
-    member_limit="Bans/kicks allowed per window",
-    seconds="Detection window in seconds",
-    action="Punishment for the offender",
-    recover="Restore deleted channels/roles and undo the attack",
-    guard_perms="Revert dangerous permission grants by untrusted users"
-)
-@discord.app_commands.choices(action=SEC_ACTION_NUKE)
-async def sec_antinuke(
-    interaction: discord.Interaction,
-    enabled: bool,
-    limit: int = None,
-    member_limit: int = None,
-    seconds: int = None,
-    action: discord.app_commands.Choice[str] = None,
-    recover: bool = None,
-    guard_perms: bool = None
-):
-    if await deny_unless_admin(interaction):
-        return
-    view = update_module(
-        interaction.guild, "antinuke", enabled,
-        limit=limit, member_limit=member_limit, window=seconds,
-        action=action.value if action else None, recover=recover, guard_perms=guard_perms
-    )
-    await interaction.response.send_message(view=view, ephemeral=True)
-
-
-@security_group.command(name="antispam", description="Configure anti-spam")
-@discord.app_commands.describe(
-    enabled="Turn anti-spam on or off",
-    messages="Messages allowed within the window",
-    seconds="Window in seconds",
-    timeout_minutes="Timeout length in minutes (0 = delete only)"
-)
-async def sec_antispam(interaction: discord.Interaction, enabled: bool, messages: int = None, seconds: int = None, timeout_minutes: int = None):
-    if await deny_unless_admin(interaction):
-        return
-    view = update_module(interaction.guild, "antispam", enabled, messages=messages, window=seconds, timeout_minutes=timeout_minutes)
-    await interaction.response.send_message(view=view, ephemeral=True)
-
-
-@security_group.command(name="antilink", description="Configure anti-link")
-@discord.app_commands.describe(
-    enabled="Turn anti-link on or off",
-    invites="Block Discord invite links",
-    links="Block all links",
-    timeout_minutes="Timeout length in minutes (0 = delete only)"
-)
-async def sec_antilink(interaction: discord.Interaction, enabled: bool, invites: bool = None, links: bool = None, timeout_minutes: int = None):
-    if await deny_unless_admin(interaction):
-        return
-    view = update_module(interaction.guild, "antilink", enabled, invites=invites, links=links, timeout_minutes=timeout_minutes)
-    await interaction.response.send_message(view=view, ephemeral=True)
-
-
-@security_group.command(name="antimention", description="Configure anti-mass-mention")
-@discord.app_commands.describe(
-    enabled="Turn anti-mass-mention on or off",
-    limit="Mentions in one message that trigger it",
-    timeout_minutes="Timeout length in minutes (0 = delete only)"
-)
-async def sec_antimention(interaction: discord.Interaction, enabled: bool, limit: int = None, timeout_minutes: int = None):
-    if await deny_unless_admin(interaction):
-        return
-    view = update_module(interaction.guild, "antimention", enabled, limit=limit, timeout_minutes=timeout_minutes)
-    await interaction.response.send_message(view=view, ephemeral=True)
-
-
-@security_group.command(name="whitelist", description="Manage trusted users (server owner only)")
-@discord.app_commands.describe(action="Add, remove or list", member="Member to add or remove")
-@discord.app_commands.choices(action=[
-    discord.app_commands.Choice(name="Add", value="add"),
-    discord.app_commands.Choice(name="Remove", value="remove"),
-    discord.app_commands.Choice(name="List", value="list"),
-])
-async def sec_whitelist(interaction: discord.Interaction, action: discord.app_commands.Choice[str], member: discord.Member = None):
-    if interaction.user.id != interaction.guild.owner_id:
-        await interaction.response.send_message(view=err("Only the server owner can manage the whitelist."), ephemeral=True)
-        return
-    await interaction.response.send_message(view=whitelist_view(interaction.guild, action.value, member), ephemeral=True)
-
-
-@security_group.command(name="setup", description="Turn on every security module with default settings")
-@discord.app_commands.describe(log_channel="Channel for security alerts (optional)")
-async def sec_setup(interaction: discord.Interaction, log_channel: discord.TextChannel = None):
-    if await deny_unless_admin(interaction):
-        return
-    await interaction.response.defer(ephemeral=True)
-    await interaction.followup.send(view=security_setup_view(interaction.guild), ephemeral=True)
-    if log_channel is not None:
-        await interaction.followup.send(view=await apply_log_channel("security", log_channel), ephemeral=True)
-
-
-@security_group.command(name="lockdown", description="Lock every text channel for @everyone")
-async def sec_lockdown(interaction: discord.Interaction):
-    if await deny_unless_admin(interaction):
-        return
-    await interaction.response.defer(ephemeral=True)
-    count = await do_lockdown(interaction.guild, f"Lockdown by {interaction.user}")
-    await send_security(interaction.guild, "🔒 Server Lockdown", f"**By:** {fmt_ref(interaction.user)}\n**Channels locked:** {count}", discord.Color.red(), ping=False)
-    await interaction.followup.send(view=ok("🔒 Lockdown Active", f"Locked **{count}** channel(s). Use `/security unlockdown` to restore."), ephemeral=True)
-
-
-@security_group.command(name="unlockdown", description="Restore channel permissions after a lockdown")
-async def sec_unlockdown(interaction: discord.Interaction):
-    if await deny_unless_admin(interaction):
-        return
-    await interaction.response.defer(ephemeral=True)
-    count = await undo_lockdown(interaction.guild)
-    await send_security(interaction.guild, "🔓 Lockdown Ended", f"**By:** {fmt_ref(interaction.user)}\n**Channels restored:** {count}", discord.Color.green(), ping=False)
-    await interaction.followup.send(view=ok("🔓 Lockdown Ended", f"Restored **{count}** channel(s)."), ephemeral=True)
-
-
-tree.add_command(security_group)
-
 
 @bot.event
 async def on_message_delete(message):
     if message.author.bot:
         return
-    if message.content:
-        last_deleted[message.channel.id] = {
-            "content": message.content,
-            "author_name": str(message.author),
-            "author_id": message.author.id,
-            "timestamp": int(message.created_at.timestamp())
-        }
     if message.guild and not message.content.lower().startswith((f"{PREFIX}purge", f"{PREFIX}say")):
         await log_message_delete(message)
 
@@ -3177,9 +1575,6 @@ async def on_message(message):
                 asyncio.create_task(delete_after(sent, 60))
                 return
 
-    if message.guild and await automod_check(message):
-        return
-
     if not message.content.startswith(PREFIX):
         if message.guild and await counting_check(message):
             return
@@ -3206,22 +1601,13 @@ async def on_message(message):
         return
     cmd = args[0].lower()
 
-    if await security_prefix(message, cmd, args):
-        return
-
     if await logs_prefix(message, cmd, args):
-        return
-
-    if await economy_prefix(message, cmd, args):
         return
 
     if await util_prefix(message, cmd, args):
         return
 
     if await mx_prefix(message, cmd, args):
-        return
-
-    if await am_prefix(message, cmd, args):
         return
 
     if cmd == "help":
@@ -3478,13 +1864,6 @@ async def on_message(message):
         save_config(config)
         await message.channel.send(view=AfkSetView(message.author, reason))
 
-    elif cmd == "snipe":
-        data = last_deleted.get(message.channel.id)
-        if not data:
-            await message.channel.send(view=SnipeEmptyView())
-        else:
-            await message.channel.send(view=SnipeView(data))
-
     elif cmd == "avatar":
         member = message.mentions[0] if message.mentions else message.author
         embed = discord.Embed(title=f"{member.display_name}'s Avatar", color=discord.Color.blurple())
@@ -3524,7 +1903,7 @@ async def on_message(message):
         save_config(config)
         await log_bot(
             message.guild,
-            "🎉 Giveaway Started",
+            "Giveaway Started",
             f"**By:** {fmt_ref(message.author)}\n**Channel:** {message.channel.mention}\n**Prize:** {prize}\n**Winners:** {winner_count}\n**Ends:** <t:{end_ts}:R>",
             discord.Color.gold()
         )
@@ -3573,13 +1952,13 @@ async def on_message(message):
         if channel:
             try:
                 original = await channel.fetch_message(int(msg_id))
-                await channel.send(f"🎉 Giveaway rerolled! **{gw['prize']}**\nNew winner(s): {winner_text}", reference=original)
+                await channel.send(f"Giveaway rerolled! **{gw['prize']}**\nNew winner(s): {winner_text}", reference=original)
             except Exception:
                 pass
         await message.channel.send(view=GiveawayRerollView(picked))
         await log_bot(
             message.guild,
-            "🎉 Giveaway Rerolled",
+            "Giveaway Rerolled",
             f"**By:** {fmt_ref(message.author)}\n**Prize:** {gw['prize']}\n**New winner(s):** {winner_text}",
             discord.Color.gold()
         )
@@ -3592,18 +1971,10 @@ async def on_message(message):
             text = getattr(message.reference.resolved, "content", "")
         await message.channel.send(view=await steal_emoji(message.guild, text, f"Stolen by {message.author}"))
 
-    elif cmd == "scatter":
-        if len(args) < 2 or not args[1].isdigit():
-            await message.channel.send(view=FailedView("Usage: `.scatter <bet>`"))
-            return
-        await message.channel.send(view=scatter_result(message.author.id, int(args[1])))
-
 
 @bot.event
 async def on_message_edit(before, after):
     if after.author.bot or not after.guild or before.content == after.content:
-        return
-    if await automod_check(after, edited=True):
         return
     body = (
         f"**Author:** {fmt_ref(after.author)}\n"
@@ -3612,7 +1983,7 @@ async def on_message_edit(before, after):
         f"**Before**\n{quote(before.content or '(empty)', 800)}\n\n"
         f"**After**\n{quote(after.content or '(empty)', 800)}"
     )
-    await send_log(after.guild, "message", LogView("✏️ Message Edited", body, discord.Color.orange()))
+    await send_log(after.guild, "message", LogView("Message Edited", body, discord.Color.orange()))
 
 
 @bot.event
@@ -3625,15 +1996,13 @@ async def on_raw_bulk_message_delete(payload):
     if guild is None:
         return
     body = f"**Channel:** <#{payload.channel_id}>\n**Messages:** {len(payload.message_ids)}"
-    await send_log(guild, "message", LogView("🧹 Bulk Delete", body, discord.Color.red()))
+    await send_log(guild, "message", LogView("Bulk Delete", body, discord.Color.red()))
 
 
 @bot.event
 async def on_member_join(member):
     if member.guild.id != GUILD_ID:
         return
-    asyncio.create_task(antiraid_on_join(member))
-    asyncio.create_task(antinuke_bot_add(member))
     asyncio.create_task(wl_on_join(member))
     asyncio.create_task(mx_on_join(member))
     age = (discord.utils.utcnow() - member.created_at).days
@@ -3644,8 +2013,8 @@ async def on_member_join(member):
         f"**Member Count:** {member.guild.member_count}"
     )
     if age < 7:
-        body += "\n⚠️ **New account**"
-    await send_log(member.guild, "member", LogView("📥 Member Joined", body, discord.Color.green()))
+        body += "\n**New account**"
+    await send_log(member.guild, "member", LogView("Member Joined", body, discord.Color.green()))
 
 
 @bot.event
@@ -3654,7 +2023,6 @@ async def on_member_remove(member):
     if guild.id != GUILD_ID:
         return
     mx_on_leave(member)
-    asyncio.create_task(nuke_track(guild, "kick", discord.AuditLogAction.kick, member.id, None))
     if peek_action("ban", member.id):
         return
     if consume_action("kick", member.id):
@@ -3671,14 +2039,13 @@ async def on_member_remove(member):
         body += f"\n**Joined:** <t:{int(member.joined_at.timestamp())}:R>"
     if roles:
         body += f"\n**Roles:** {clip(' '.join(roles), 700)}"
-    await send_log(guild, "member", LogView("📤 Member Left", body, discord.Color.red()))
+    await send_log(guild, "member", LogView("Member Left", body, discord.Color.red()))
 
 
 @bot.event
 async def on_member_ban(guild, user):
     if guild.id != GUILD_ID:
         return
-    asyncio.create_task(nuke_track(guild, "ban", discord.AuditLogAction.ban, user.id, user.id))
     if consume_action("ban", user.id):
         return
     entry = await find_audit(guild, discord.AuditLogAction.ban, user.id)
@@ -3710,11 +2077,9 @@ async def on_member_update(before, after):
         )
         if entry and entry.user and entry.user.id != after.id:
             body += f"\n**Changed by:** {fmt_ref(entry.user)}"
-        await send_log(guild, "member", LogView("✏️ Nickname Changed", body, discord.Color.blurple()))
+        await send_log(guild, "member", LogView("Nickname Changed", body, discord.Color.blurple()))
     added = [r for r in after.roles if r not in before.roles]
     removed = [r for r in before.roles if r not in after.roles]
-    if added:
-        asyncio.create_task(antinuke_member_role_guard(after, added))
     if added or removed:
         entry = await find_audit(guild, discord.AuditLogAction.member_role_update, after.id)
         body = f"**Member:** {fmt_ref(after)}"
@@ -3725,7 +2090,7 @@ async def on_member_update(before, after):
         if entry and entry.user:
             body += f"\n**By:** {fmt_ref(entry.user)}"
         color = discord.Color.green() if added and not removed else discord.Color.orange()
-        await send_log(guild, "member", LogView("🎭 Roles Updated", body, color))
+        await send_log(guild, "member", LogView("Roles Updated", body, color))
     if before.timed_out_until != after.timed_out_until:
         kind = "Timeout" if after.timed_out_until else "Untimeout"
         if not consume_action(kind.lower(), after.id):
@@ -3743,13 +2108,13 @@ async def on_voice_state_update(member, before, after):
     if before.channel == after.channel:
         return
     if before.channel is None:
-        title, color = "🔊 Voice Join", discord.Color.green()
+        title, color = "Voice Join", discord.Color.green()
         body = f"{fmt_ref(member)} joined {after.channel.mention}"
     elif after.channel is None:
-        title, color = "🔇 Voice Leave", discord.Color.red()
+        title, color = "Voice Leave", discord.Color.red()
         body = f"{fmt_ref(member)} left {before.channel.mention}"
     else:
-        title, color = "🔀 Voice Move", discord.Color.blurple()
+        title, color = "Voice Move", discord.Color.blurple()
         body = f"{fmt_ref(member)} moved from {before.channel.mention} to {after.channel.mention}"
     await send_log(member.guild, "voice", LogView(title, body, color))
 
@@ -3758,12 +2123,11 @@ async def on_voice_state_update(member, before, after):
 async def on_guild_channel_create(channel):
     if channel.guild.id != GUILD_ID:
         return
-    asyncio.create_task(nuke_track(channel.guild, "channel_create", discord.AuditLogAction.channel_create, channel.id, channel.id))
     entry = await find_audit(channel.guild, discord.AuditLogAction.channel_create, channel.id)
     body = f"**Channel:** {channel.mention} (`{channel.id}`)\n**Type:** {str(channel.type).replace('_', ' ').title()}"
     if entry and entry.user:
         body += f"\n**Created by:** {fmt_ref(entry.user)}"
-    await send_log(channel.guild, "server", LogView("➕ Channel Created", body, discord.Color.green()))
+    await send_log(channel.guild, "server", LogView("Channel Created", body, discord.Color.green()))
 
 
 @bot.event
@@ -3771,12 +2135,11 @@ async def on_guild_channel_delete(channel):
     if channel.guild.id != GUILD_ID:
         return
     await ticket_channel_deleted(channel)
-    asyncio.create_task(nuke_track(channel.guild, "channel_delete", discord.AuditLogAction.channel_delete, channel.id, snapshot_channel(channel)))
     entry = await find_audit(channel.guild, discord.AuditLogAction.channel_delete, channel.id)
     body = f"**Channel:** #{channel.name} (`{channel.id}`)\n**Type:** {str(channel.type).replace('_', ' ').title()}"
     if entry and entry.user:
         body += f"\n**Deleted by:** {fmt_ref(entry.user)}"
-    await send_log(channel.guild, "server", LogView("➖ Channel Deleted", body, discord.Color.red()))
+    await send_log(channel.guild, "server", LogView("Channel Deleted", body, discord.Color.red()))
 
 
 @bot.event
@@ -3802,38 +2165,35 @@ async def on_guild_channel_update(before, after):
     body = f"**Channel:** {after.mention} (`{after.id}`)\n" + "\n".join(changes)
     if entry and entry.user:
         body += f"\n**By:** {fmt_ref(entry.user)}"
-    await send_log(after.guild, "server", LogView("🛠️ Channel Updated", body, discord.Color.orange()))
+    await send_log(after.guild, "server", LogView("Channel Updated", body, discord.Color.orange()))
 
 
 @bot.event
 async def on_guild_role_create(role):
     if role.guild.id != GUILD_ID:
         return
-    asyncio.create_task(nuke_track(role.guild, "role_create", discord.AuditLogAction.role_create, role.id, role.id))
     entry = await find_audit(role.guild, discord.AuditLogAction.role_create, role.id)
     body = f"**Role:** {role.mention} (`{role.id}`)"
     if entry and entry.user:
         body += f"\n**Created by:** {fmt_ref(entry.user)}"
-    await send_log(role.guild, "server", LogView("➕ Role Created", body, discord.Color.green()))
+    await send_log(role.guild, "server", LogView("Role Created", body, discord.Color.green()))
 
 
 @bot.event
 async def on_guild_role_delete(role):
     if role.guild.id != GUILD_ID:
         return
-    asyncio.create_task(nuke_track(role.guild, "role_delete", discord.AuditLogAction.role_delete, role.id, snapshot_role(role)))
     entry = await find_audit(role.guild, discord.AuditLogAction.role_delete, role.id)
     body = f"**Role:** {role.name} (`{role.id}`)"
     if entry and entry.user:
         body += f"\n**Deleted by:** {fmt_ref(entry.user)}"
-    await send_log(role.guild, "server", LogView("➖ Role Deleted", body, discord.Color.red()))
+    await send_log(role.guild, "server", LogView("Role Deleted", body, discord.Color.red()))
 
 
 @bot.event
 async def on_guild_role_update(before, after):
     if after.guild.id != GUILD_ID:
         return
-    asyncio.create_task(antinuke_role_update_guard(before, after))
     changes = []
     if before.name != after.name:
         changes.append(f"**Name:** `{before.name}` → `{after.name}`")
@@ -3856,7 +2216,7 @@ async def on_guild_role_update(before, after):
     body = f"**Role:** {after.mention} (`{after.id}`)\n" + "\n".join(changes)
     if entry and entry.user:
         body += f"\n**By:** {fmt_ref(entry.user)}"
-    await send_log(after.guild, "server", LogView("🛠️ Role Updated", body, discord.Color.orange()))
+    await send_log(after.guild, "server", LogView("Role Updated", body, discord.Color.orange()))
 
 
 @bot.event
@@ -3878,7 +2238,7 @@ async def on_guild_update(before, after):
     body = "\n".join(changes)
     if entry and entry.user:
         body += f"\n**By:** {fmt_ref(entry.user)}"
-    await send_log(after, "server", LogView("🏠 Server Updated", body, discord.Color.orange()))
+    await send_log(after, "server", LogView("Server Updated", body, discord.Color.orange()))
 
 
 @bot.event
@@ -3891,7 +2251,7 @@ async def on_invite_create(invite):
         body += f"\n**Created by:** {fmt_ref(invite.inviter)}"
     body += f"\n**Max Uses:** {invite.max_uses or 'Unlimited'}"
     body += f"\n**Expires:** {'Never' if not invite.max_age else f'in {invite.max_age // 3600}h'}"
-    await send_log(guild, "server", LogView("🔗 Invite Created", body, discord.Color.green()))
+    await send_log(guild, "server", LogView("Invite Created", body, discord.Color.green()))
 
 
 @bot.event
@@ -3900,27 +2260,7 @@ async def on_invite_delete(invite):
     if guild is None:
         return
     body = f"**Code:** `{invite.code}`\n**Channel:** {invite.channel.mention if invite.channel else 'Unknown'}"
-    await send_log(guild, "server", LogView("🔗 Invite Deleted", body, discord.Color.red()))
-
-
-@bot.event
-async def on_webhooks_update(channel):
-    guild = channel.guild
-    if guild.id != GUILD_ID or not sec_cfg("antinuke")["enabled"]:
-        return
-    await asyncio.sleep(1)
-    try:
-        async for entry in guild.audit_logs(limit=5, action=discord.AuditLogAction.webhook_create):
-            if entry.id in seen_audit:
-                continue
-            if (discord.utils.utcnow() - entry.created_at).total_seconds() > 15:
-                continue
-            seen_audit.add(entry.id)
-            if len(seen_audit) > 500:
-                seen_audit.clear()
-            await nuke_record(guild, "webhook_create", entry, getattr(entry.target, "id", None))
-    except Exception as e:
-        print(f"Webhook audit failed: {e}")
+    await send_log(guild, "server", LogView("Invite Deleted", body, discord.Color.red()))
 
 
 TICKET_BANNER = "ticket_banner.png"
@@ -4005,7 +2345,6 @@ class TicketClaimButton(discord.ui.Button):
         super().__init__(
             label="Claimed" if claimed_by else "Claim",
             style=discord.ButtonStyle.success,
-            emoji="🙋",
             custom_id="ticket_claim",
             disabled=bool(claimed_by)
         )
@@ -4026,7 +2365,7 @@ class TicketClaimButton(discord.ui.Button):
         save_config(config)
         await interaction.response.edit_message(view=TicketWelcomeView(data))
         await interaction.channel.send(
-            view=tk_ok("🙋 Ticket Claimed", f"{interaction.user.mention} will be assisting <@{data['user_id']}>."),
+            view=tk_ok("Ticket Claimed", f"{interaction.user.mention} will be assisting <@{data['user_id']}>."),
             allowed_mentions=discord.AllowedMentions.none()
         )
 
@@ -4036,7 +2375,6 @@ class TicketCloseButton(discord.ui.Button):
         super().__init__(
             label="Close",
             style=discord.ButtonStyle.danger,
-            emoji="🔒",
             custom_id="ticket_close"
         )
 
@@ -4059,9 +2397,9 @@ class TicketCloseConfirm(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=60)
 
-    @discord.ui.button(label="Confirm Close", style=discord.ButtonStyle.danger, emoji="🔒")
+    @discord.ui.button(label="Confirm Close", style=discord.ButtonStyle.danger)
     async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.edit_message(content="🔒 Closing ticket...", view=None)
+        await interaction.response.edit_message(content="Closing ticket...", view=None)
         await close_ticket(interaction.channel, interaction.user)
 
     @discord.ui.button(label="Cancel", style=discord.ButtonStyle.secondary)
@@ -4099,12 +2437,12 @@ class TicketWelcomeView(discord.ui.LayoutView):
     def __init__(self, data: dict):
         super().__init__(timeout=None)
         created = int(data.get("created", time.time()))
-        status = f"🙋 Claimed by <@{data['claimed_by']}>" if data.get("claimed_by") else "🟢 Waiting for staff"
+        status = f"Claimed by <@{data['claimed_by']}>" if data.get("claimed_by") else "Waiting for staff"
         product = data.get("product") or "Not specified"
         tried = data.get("tried") or "Not specified"
         self.add_item(
             discord.ui.Container(
-                discord.ui.TextDisplay("# 🎫 Support Ticket"),
+                discord.ui.TextDisplay("# Support Ticket"),
                 discord.ui.Separator(),
                 discord.ui.TextDisplay(
                     f"**Opened by:** <@{data['user_id']}>\n"
@@ -4212,13 +2550,13 @@ class TicketModal(discord.ui.Modal, title="Support Ticket"):
         except Exception:
             pass
         await channel.send(view=TicketWelcomeView(data))
-        await interaction.followup.send(view=tk_ok("🎫 Ticket Created", f"Your ticket is ready: {channel.mention}"), ephemeral=True)
+        await interaction.followup.send(view=tk_ok("Ticket Created", f"Your ticket is ready: {channel.mention}"), ephemeral=True)
 
         log_ch = guild.get_channel(t["log_id"]) if t.get("log_id") else None
         if log_ch:
             try:
                 await log_ch.send(view=TicketInfoView(
-                    "🎫 Ticket Opened",
+                    "Ticket Opened",
                     f"**User:** {user.mention} (`{user.id}`)\n**Channel:** {channel.mention}\n**Issue:** {data['issue'][:300]}",
                     discord.Color.green()
                 ))
@@ -4272,7 +2610,7 @@ async def close_ticket(channel: discord.TextChannel, closer: discord.Member):
         try:
             await log_ch.send(
                 view=TicketInfoView(
-                    "🔒 Ticket Closed",
+                    "Ticket Closed",
                     f"**Ticket:** #{data.get('number', '?')} (`{channel.name}`)\n"
                     f"**Owner:** <@{data['user_id']}>\n"
                     f"**Claimed by:** {claimed}\n"
@@ -4288,14 +2626,14 @@ async def close_ticket(channel: discord.TextChannel, closer: discord.Member):
     if opener:
         try:
             await opener.send(
-                f"🔒 Your ticket **{channel.name}** in **{guild.name}** was closed. Transcript attached.",
+                f"Your ticket **{channel.name}** in **{guild.name}** was closed. Transcript attached.",
                 file=discord.File(BytesIO(transcript), filename=fname)
             )
         except Exception:
             pass
 
     try:
-        await channel.send(view=TicketInfoView("🔒 Ticket Closed", f"Closed by {closer.mention}. Deleting in 5 seconds...", discord.Color.red()))
+        await channel.send(view=TicketInfoView("Ticket Closed", f"Closed by {closer.mention}. Deleting in 5 seconds...", discord.Color.red()))
     except Exception:
         pass
     await asyncio.sleep(5)
@@ -5369,7 +3707,7 @@ def wl_status_text(guild: discord.Guild) -> str:
     channel = guild.get_channel(c["channel_id"]) if c.get("channel_id") else None
     role = guild.get_role(c["autorole_id"]) if c.get("autorole_id") else None
     return (
-        f"**Status:** {'🟢 Enabled' if c.get('enabled') else '🔴 Disabled'}\n"
+        f"**Status:** {'Enabled' if c.get('enabled') else 'Disabled'}\n"
         f"**Channel:** {channel.mention if channel else 'Not set'}\n"
         f"**Auto role:** {role.mention if role else 'None'}\n"
         f"**Message:** {'Custom' if c.get('data') else 'Default'}\n\n"
@@ -5550,14 +3888,6 @@ def ut_rest(message: discord.Message) -> str:
     return parts[1].strip() if len(parts) > 1 else ""
 
 
-def ut_code(text: str) -> str:
-    t = text.strip()
-    m = re.match(r"^```[a-zA-Z0-9_+-]*\n?(.*?)```$", t, re.S)
-    if m:
-        return m.group(1).strip()
-    return t.strip("`").strip()
-
-
 def ut_clip(text: str, n: int) -> str:
     return text if len(text) <= n else text[: n - 1] + "…"
 
@@ -5614,30 +3944,6 @@ async def ut_http(url: str, params: dict = None, as_json: bool = True, headers: 
                 return await res.text()
     except Exception:
         return None
-
-
-async def ut_public(host: str):
-    try:
-        infos = await asyncio.get_running_loop().getaddrinfo(host, None)
-    except Exception:
-        return None
-    addrs = {i[4][0].split("%")[0] for i in infos}
-    if not addrs:
-        return None
-    for a in addrs:
-        try:
-            if not ipaddress.ip_address(a).is_global:
-                return None
-        except ValueError:
-            return None
-    return sorted(addrs)[0]
-
-
-def ut_domain(text: str):
-    t = text.strip().lower()
-    t = re.sub(r"^[a-z]+://", "", t)
-    t = t.split("/")[0].split("?")[0].split(":")[0].rstrip(".")
-    return t if re.fullmatch(r"(?:[a-z0-9-]{1,63}\.)+[a-z0-9-]{2,63}", t) else None
 
 
 def ut_reply_text(message: discord.Message) -> str:
@@ -5761,64 +4067,6 @@ async def c_roleinfo(message, rest):
     await ut_send(message, "Role Info", "\n".join(lines), thumb=r.icon.url if r.icon else None)
 
 
-async def c_channelinfo(message, rest):
-    ch = None
-    if message.channel_mentions:
-        ch = message.channel_mentions[0]
-    elif rest.split() and rest.split()[0].isdigit():
-        ch = message.guild.get_channel(int(rest.split()[0]))
-    elif rest:
-        ch = discord.utils.get(message.guild.channels, name=rest.lower().lstrip("#"))
-    else:
-        ch = message.channel
-    if ch is None:
-        return await ut_fail(message, "Channel not found.")
-    lines = [
-        f"**Name:** {ch.name}",
-        f"**ID:** `{ch.id}`",
-        f"**Type:** {str(ch.type).replace('_', ' ').title()}",
-        f"**Mention:** {ch.mention}",
-        f"**Created:** {ut_ts(ch.created_at)}",
-    ]
-    if getattr(ch, "category", None):
-        lines.append(f"**Category:** {ch.category.name}")
-    lines.append(f"**Position:** {ch.position}")
-    if getattr(ch, "topic", None):
-        lines.append(f"**Topic:** {ut_clip(ch.topic, 300)}")
-    if getattr(ch, "slowmode_delay", 0):
-        lines.append(f"**Slowmode:** {ch.slowmode_delay}s")
-    if hasattr(ch, "is_nsfw"):
-        lines.append(f"**NSFW:** {'Yes' if ch.is_nsfw() else 'No'}")
-    if isinstance(ch, (discord.VoiceChannel, discord.StageChannel)):
-        lines.append(f"**Bitrate:** {ch.bitrate // 1000} kbps")
-        lines.append(f"**User limit:** {ch.user_limit or 'Unlimited'}")
-    await ut_send(message, "Channel Info", "\n".join(lines))
-
-
-async def c_inviteinfo(message, rest):
-    m = re.search(r"(?:discord(?:app)?\.com/invite|discord\.gg)/([\w-]+)", rest) or re.fullmatch(r"([\w-]{2,32})", rest.strip())
-    if not m:
-        return await ut_usage(message, "`.inviteinfo <invite link or code>`")
-    try:
-        inv = await bot.fetch_invite(m.group(1), with_counts=True)
-    except Exception:
-        return await ut_fail(message, "That invite is invalid or expired.")
-    lines = [
-        f"**Code:** `{inv.code}`",
-        f"**Server:** {inv.guild.name if inv.guild else 'Unknown'}",
-        f"**Server ID:** `{inv.guild.id}`" if inv.guild else "",
-        f"**Channel:** #{inv.channel.name}" if inv.channel else "",
-        f"**Inviter:** {inv.inviter}" if inv.inviter else "",
-        f"**Members:** {inv.approximate_member_count}" if inv.approximate_member_count is not None else "",
-        f"**Online:** {inv.approximate_presence_count}" if inv.approximate_presence_count is not None else "",
-        f"**Expires:** {ut_ts(inv.expires_at)}" if inv.expires_at else "**Expires:** Never",
-    ]
-    if inv.guild and getattr(inv.guild, "description", None):
-        lines.append(f"**Description:** {ut_clip(inv.guild.description, 300)}")
-    icon = inv.guild.icon.url if inv.guild and inv.guild.icon else None
-    await ut_send(message, "Invite Info", "\n".join(x for x in lines if x), thumb=icon)
-
-
 async def c_banner(message, rest):
     u = await ut_member(message, rest)
     if u is None:
@@ -5873,91 +4121,6 @@ async def c_stats(message, rest):
     await ut_send(message, "Stats", "\n".join(lines))
 
 
-async def c_qr(message, rest):
-    text = rest or ut_reply_text(message)
-    if not text:
-        return await ut_usage(message, "`.qr <text or link>`")
-    if len(text) > 500:
-        return await ut_fail(message, "Text is too long (max 500 characters).")
-    url = "https://api.qrserver.com/v1/create-qr-code/?size=400x400&margin=10&data=" + urllib.parse.quote(text, safe="")
-    await ut_send(message, "QR Code", f"**Data:** {ut_clip(text, 200)}", image=url)
-
-
-UT_LANGS = {
-    "english": "en", "tagalog": "tl", "filipino": "tl", "japanese": "ja", "korean": "ko",
-    "chinese": "zh-CN", "spanish": "es", "french": "fr", "german": "de", "italian": "it",
-    "portuguese": "pt", "russian": "ru", "arabic": "ar", "hindi": "hi", "thai": "th",
-    "vietnamese": "vi", "indonesian": "id", "malay": "ms", "turkish": "tr", "dutch": "nl",
-}
-
-
-async def c_translate(message, rest):
-    parts = rest.split(None, 1)
-    if not parts:
-        return await ut_usage(message, "`.translate <language> <text>` (or reply to a message)")
-    code = UT_LANGS.get(parts[0].lower(), parts[0])
-    text = parts[1] if len(parts) > 1 else ut_reply_text(message)
-    if not text:
-        return await ut_usage(message, "`.translate <language> <text>` (or reply to a message)")
-    if not re.fullmatch(r"[A-Za-z]{2,3}(-[A-Za-z]{2,4})?", code):
-        return await ut_fail(message, "Unknown language. Use a name like `tagalog` or a code like `tl`.")
-    data = await ut_http("https://translate.googleapis.com/translate_a/single", params={"client": "gtx", "sl": "auto", "tl": code, "dt": "t", "q": text[:1500]})
-    if not data or not data[0]:
-        return await ut_fail(message, "Translation failed. Try again later.")
-    translated = "".join(seg[0] for seg in data[0] if seg and seg[0])
-    source = data[2] if len(data) > 2 and isinstance(data[2], str) else "auto"
-    await ut_send(message, "Translation", f"**{source} → {code}**\n\n{ut_clip(translated, 1800)}\n\n-# Original: {ut_clip(text, 300)}")
-
-
-UT_COLOR_NAMES = {
-    "red": "ff0000", "green": "00ff00", "blue": "0000ff", "white": "ffffff", "black": "000000",
-    "yellow": "ffff00", "orange": "ffa500", "purple": "800080", "pink": "ffc0cb", "cyan": "00ffff",
-    "magenta": "ff00ff", "gray": "808080", "grey": "808080", "brown": "a52a2a", "gold": "ffd700",
-    "blurple": "5865f2", "teal": "008080", "navy": "000080", "lime": "32cd32", "maroon": "800000",
-}
-
-
-def ut_parse_color(text: str):
-    t = text.strip().lower()
-    if t in UT_COLOR_NAMES:
-        h = UT_COLOR_NAMES[t]
-        return tuple(int(h[i:i + 2], 16) for i in (0, 2, 4))
-    m = re.fullmatch(r"(?:#|0x)?([0-9a-f]{6})", t)
-    if m:
-        h = m.group(1)
-        return tuple(int(h[i:i + 2], 16) for i in (0, 2, 4))
-    m = re.fullmatch(r"#?([0-9a-f]{3})", t)
-    if m:
-        return tuple(int(c * 2, 16) for c in m.group(1))
-    nums = re.findall(r"\d+", t)
-    if len(nums) == 3 and all(int(n) <= 255 for n in nums):
-        return tuple(int(n) for n in nums)
-    return None
-
-
-async def c_color(message, rest):
-    if not rest:
-        return await ut_usage(message, "`.color <#hex | r g b | name>`")
-    rgb = ut_parse_color(rest)
-    if rgb is None:
-        return await ut_fail(message, "Could not read that color. Try `#5865F2`, `88 101 242`, or `red`.")
-    r, g, b = rgb
-    h, l, s = colorsys.rgb_to_hls(r / 255, g / 255, b / 255)
-    hh, ss, vv = colorsys.rgb_to_hsv(r / 255, g / 255, b / 255)
-    k = 1 - max(r, g, b) / 255
-    cmyk = (0, 0, 0, round(k * 100)) if k == 1 else tuple(round((1 - c / 255 - k) / (1 - k) * 100) for c in rgb) + (round(k * 100),)
-    hexv = f"{r:02X}{g:02X}{b:02X}"
-    lines = [
-        f"**HEX:** `#{hexv}`",
-        f"**RGB:** `{r}, {g}, {b}`",
-        f"**HSL:** `{round(h * 360)}°, {round(s * 100)}%, {round(l * 100)}%`",
-        f"**HSV:** `{round(hh * 360)}°, {round(ss * 100)}%, {round(vv * 100)}%`",
-        f"**CMYK:** `{cmyk[0]}%, {cmyk[1]}%, {cmyk[2]}%, {cmyk[3]}%`",
-        f"**Decimal:** `{int(hexv, 16)}`",
-    ]
-    await ut_send(message, "Color Info", "\n".join(lines), image=f"https://singlecolorimage.com/get/{hexv}/400x120")
-
-
 UT_BINOPS = {
     ast.Add: operator.add, ast.Sub: operator.sub, ast.Mult: operator.mul, ast.Div: operator.truediv,
     ast.FloorDiv: operator.floordiv, ast.Mod: operator.mod, ast.Pow: operator.pow,
@@ -5994,76 +4157,6 @@ def ut_eval(node):
             raise ValueError("Factorial is too large")
         return UT_FUNCS[node.func.id](*args)
     raise ValueError("Unsupported expression")
-
-
-async def c_math(message, rest):
-    if not rest:
-        return await ut_usage(message, "`.math <expression>` e.g. `.math sqrt(144) + 2^3`")
-    expr = ut_code(rest).replace("^", "**").replace("×", "*").replace("÷", "/").replace(",", "")
-    try:
-        result = ut_eval(ast.parse(expr, mode="eval"))
-    except ZeroDivisionError:
-        return await ut_fail(message, "Cannot divide by zero.")
-    except Exception as e:
-        return await ut_fail(message, f"Invalid expression: {ut_clip(str(e), 100)}")
-    if isinstance(result, float):
-        result = int(result) if result.is_integer() and abs(result) < 1e15 else round(result, 10)
-    await ut_send(message, "Math", f"**Expression:** `{ut_clip(expr, 200)}`\n**Result:** `{ut_clip(str(result), 1000)}`")
-
-
-UT_UNITS = {"s": 1, "m": 60, "h": 3600, "d": 86400, "w": 604800}
-
-
-def ut_parse_time(text: str):
-    t = text.strip().lower()
-    now = datetime.now(timezone.utc)
-    if not t or t == "now":
-        return now
-    if re.fullmatch(r"\d{10,13}", t):
-        v = int(t)
-        if len(t) == 13:
-            v //= 1000
-        return datetime.fromtimestamp(v, timezone.utc)
-    rel = re.fullmatch(r"(?:in\s+)?([+-]?)((?:\d+\s*[smhdw]\s*)+)(ago)?", t)
-    if rel:
-        sign = -1 if rel.group(1) == "-" or rel.group(3) else 1
-        total = sum(int(n) * UT_UNITS[u] for n, u in re.findall(r"(\d+)\s*([smhdw])", rel.group(2)))
-        return now + timedelta(seconds=sign * total)
-    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M", "%Y-%m-%d", "%m/%d/%Y %H:%M", "%m/%d/%Y"):
-        try:
-            return datetime.strptime(text.strip(), fmt).replace(tzinfo=timezone.utc)
-        except ValueError:
-            continue
-    return None
-
-
-async def c_timestamp(message, rest):
-    dt = ut_parse_time(rest)
-    if dt is None:
-        return await ut_usage(message, "`.timestamp [now | unix | 2026-12-25 18:30 | in 2h30m | 3d ago]` (UTC)")
-    ts = int(dt.timestamp())
-    names = {"t": "Short time", "T": "Long time", "d": "Short date", "D": "Long date", "f": "Short date/time", "F": "Long date/time", "R": "Relative"}
-    lines = [f"**Unix:** `{ts}`"]
-    for fmt, name in names.items():
-        lines.append(f"**{name}:** <t:{ts}:{fmt}>\n`<t:{ts}:{fmt}>`")
-    await ut_send(message, "Timestamp", "\n".join(lines))
-
-
-async def c_urban(message, rest):
-    if not rest:
-        return await ut_usage(message, "`.urban <word>`")
-    data = await ut_http("https://api.urbandictionary.com/v0/define", params={"term": rest})
-    if not data or not data.get("list"):
-        return await ut_fail(message, "No definition found.")
-    d = data["list"][0]
-    clean = lambda s: s.replace("[", "").replace("]", "").replace("\r", "")
-    lines = [
-        f"**Definition**\n{ut_clip(clean(d['definition']), 900)}",
-        f"**Example**\n{ut_clip(clean(d['example']), 500)}" if d.get("example") else "",
-        f"👍 {d.get('thumbs_up', 0)}  👎 {d.get('thumbs_down', 0)} • by {d.get('author', 'unknown')}",
-        f"[Open on Urban Dictionary]({d['permalink']})" if d.get("permalink") else "",
-    ]
-    await ut_send(message, d["word"], "\n\n".join(x for x in lines if x))
 
 
 async def c_stealsticker(message, rest):
@@ -6404,496 +4497,6 @@ async def c_counting(message, rest):
         await ut_usage(message, usage)
 
 
-async def c_diff(message, rest):
-    text = rest
-    blocks = re.findall(r"```(?:[a-zA-Z0-9_+-]*\n)?(.*?)```", text, re.S)
-    if len(blocks) >= 2:
-        a, b = blocks[0], blocks[1]
-    elif "\n---\n" in text:
-        a, _, b = text.partition("\n---\n")
-    elif " | " in text:
-        a, _, b = text.partition(" | ")
-    else:
-        return await ut_usage(message, "`.diff <text one> | <text two>` or two code blocks")
-    if "\n" not in a.strip() and "\n" not in b.strip():
-        la, lb = a.split(), b.split()
-    else:
-        la, lb = a.strip().splitlines(), b.strip().splitlines()
-    diff = list(difflib.unified_diff(la, lb, "before", "after", lineterm="", n=2))
-    if not diff:
-        return await ut_send(message, "Diff", "The two texts are identical.")
-    ratio = difflib.SequenceMatcher(None, a, b).ratio()
-    await ut_send(message, "Diff", f"**Similarity:** {ratio * 100:.1f}%\n" + ut_block(ut_clip("\n".join(diff), 2800), "diff"))
-
-
-UT_DNS_TYPES = {"A": 1, "NS": 2, "CNAME": 5, "SOA": 6, "PTR": 12, "MX": 15, "TXT": 16, "AAAA": 28, "SRV": 33, "CAA": 257}
-
-
-async def c_dns(message, rest):
-    parts = rest.split()
-    if not parts:
-        return await ut_usage(message, "`.dns <domain> [type]` types: " + ", ".join(UT_DNS_TYPES))
-    domain = ut_domain(parts[0])
-    if not domain:
-        return await ut_fail(message, "Invalid domain.")
-    types = [parts[1].upper()] if len(parts) > 1 else ["A", "AAAA", "CNAME", "MX", "NS", "TXT"]
-    if any(t not in UT_DNS_TYPES for t in types):
-        return await ut_fail(message, "Unsupported record type. Use: " + ", ".join(UT_DNS_TYPES))
-    results = await asyncio.gather(*[ut_http("https://dns.google/resolve", params={"name": domain, "type": t}) for t in types])
-    lines = []
-    for t, d in zip(types, results):
-        for a in (d or {}).get("Answer", []):
-            if a.get("type") == UT_DNS_TYPES[t]:
-                lines.append(f"{t:<6} {ut_clip(str(a.get('data', '')), 120)}  (TTL {a.get('TTL')})")
-    if not lines:
-        return await ut_fail(message, f"No records found for `{domain}`.")
-    await ut_send(message, f"DNS — {domain}", ut_block("\n".join(lines)))
-
-
-async def c_entropy(message, rest):
-    text = ut_code(rest)
-    if not text:
-        return await ut_usage(message, "`.entropy <password or text>`")
-    try:
-        await message.delete()
-    except Exception:
-        pass
-    pool = 0
-    if re.search(r"[a-z]", text):
-        pool += 26
-    if re.search(r"[A-Z]", text):
-        pool += 26
-    if re.search(r"\d", text):
-        pool += 10
-    if re.search(r"[^\w\s]|_", text):
-        pool += 33
-    if re.search(r"\s", text):
-        pool += 1
-    if re.search(r"[^\x00-\x7f]", text):
-        pool += 100
-    pool = max(pool, 2)
-    bits = len(text) * math.log2(pool)
-    counts = Counter(text)
-    shannon = -sum(c / len(text) * math.log2(c / len(text)) for c in counts.values())
-    if bits < 28:
-        label = "Very weak"
-    elif bits < 36:
-        label = "Weak"
-    elif bits < 60:
-        label = "Reasonable"
-    elif bits < 128:
-        label = "Strong"
-    else:
-        label = "Very strong"
-    seconds = (2 ** min(bits, 400)) / 2 / 1e10
-    crack = "centuries+" if seconds > 31536000 * 1000 else ut_human(seconds) if seconds >= 1 else "instantly"
-    lines = [
-        f"**Length:** {len(text)}",
-        f"**Character pool:** {pool}",
-        f"**Entropy:** {bits:.1f} bits",
-        f"**Shannon entropy:** {shannon:.2f} bits/char",
-        f"**Strength:** {label}",
-        f"**Brute force (10B guesses/sec):** {crack}",
-        "-# Your message was deleted for safety. Never share real passwords publicly.",
-    ]
-    await ut_send(message, "Entropy", "\n".join(lines))
-
-
-async def c_expand(message, rest):
-    url = rest.split()[0] if rest else ""
-    if not url:
-        return await ut_usage(message, "`.expand <short link>`")
-    if not re.match(r"^https?://", url, re.I):
-        url = "https://" + url
-    chain = []
-    note = ""
-    try:
-        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=10), headers=UT_UA) as session:
-            current = url
-            for _ in range(10):
-                host = urllib.parse.urlparse(current).hostname
-                if not host or await ut_public(host) is None:
-                    note = "Stopped: the next address could not be resolved or isn't public."
-                    break
-                async with session.get(current, allow_redirects=False) as res:
-                    status = res.status
-                    loc = res.headers.get("Location")
-                chain.append((current, status))
-                if status in (301, 302, 303, 307, 308) and loc:
-                    current = urllib.parse.urljoin(current, loc)
-                else:
-                    break
-            else:
-                note = "Stopped after 10 redirects."
-    except Exception as e:
-        note = f"Request failed: {type(e).__name__}"
-    if not chain:
-        return await ut_fail(message, note or "Could not reach that link.")
-    lines = [f"{i + 1}. `{ut_clip(u, 150)}` ({s})" for i, (u, s) in enumerate(chain)]
-    final = chain[-1][0]
-    if chain[-1][1] in (301, 302, 303, 307, 308) and note:
-        final = current
-    body = f"**Final destination:**\n{ut_clip(final, 500)}\n\n**Redirect chain:**\n" + "\n".join(lines)
-    if note:
-        body += f"\n\n-# {note}"
-    await ut_send(message, "Expand URL", body)
-
-
-UT_HASHES = ["md5", "sha1", "sha224", "sha256", "sha384", "sha512", "sha3_256", "blake2b"]
-
-
-async def c_hash(message, rest):
-    parts = rest.split(None, 1)
-    if not parts:
-        return await ut_usage(message, "`.hash <text>` or `.hash <algorithm> <text>`\nAlgorithms: " + ", ".join(UT_HASHES))
-    if parts[0].lower() in UT_HASHES and len(parts) > 1:
-        algos, text = [parts[0].lower()], parts[1]
-    else:
-        algos, text = UT_HASHES, rest
-    lines = [f"{a:<9} {hashlib.new(a, text.encode()).hexdigest()}" for a in algos]
-    await ut_send(message, "Hash", f"**Input:** {ut_clip(text, 100)}\n" + ut_block("\n".join(lines)))
-
-
-async def c_httpstatus(message, rest):
-    if not rest.strip().isdigit():
-        return await ut_usage(message, "`.httpstatus <code>` e.g. `.httpstatus 404`")
-    code = int(rest.strip())
-    try:
-        st = http.HTTPStatus(code)
-    except ValueError:
-        return await ut_fail(message, "Unknown HTTP status code.")
-    cat = {1: "Informational", 2: "Success", 3: "Redirection", 4: "Client Error", 5: "Server Error"}[code // 100]
-    await ut_send(message, f"HTTP {code}", f"**{st.phrase}**\n**Category:** {cat}\n\n{st.description}")
-
-
-UT_IBAN = {
-    "AD": 24, "AE": 23, "AL": 28, "AT": 20, "AZ": 28, "BA": 20, "BE": 16, "BG": 22, "BH": 22, "BR": 29,
-    "BY": 28, "CH": 21, "CR": 22, "CY": 28, "CZ": 24, "DE": 22, "DK": 18, "DO": 28, "EE": 20, "EG": 29,
-    "ES": 24, "FI": 18, "FO": 18, "FR": 27, "GB": 22, "GE": 22, "GI": 23, "GL": 18, "GR": 27, "GT": 28,
-    "HR": 21, "HU": 28, "IE": 22, "IL": 23, "IQ": 23, "IS": 26, "IT": 27, "JO": 30, "KW": 30, "KZ": 20,
-    "LB": 28, "LI": 21, "LT": 20, "LU": 20, "LV": 21, "MC": 27, "MD": 24, "ME": 22, "MK": 19, "MR": 27,
-    "MT": 31, "MU": 30, "NL": 18, "NO": 15, "PK": 24, "PL": 28, "PS": 29, "PT": 25, "QA": 29, "RO": 24,
-    "RS": 22, "SA": 24, "SC": 31, "SE": 24, "SI": 19, "SK": 24, "SM": 27, "TL": 23, "TN": 24, "TR": 26,
-    "UA": 29, "VA": 22, "VG": 24, "XK": 20,
-}
-
-
-async def c_iban(message, rest):
-    iban = re.sub(r"\s+", "", rest).upper()
-    if not iban:
-        return await ut_usage(message, "`.iban <iban>`")
-    problems = []
-    if not re.fullmatch(r"[A-Z]{2}\d{2}[A-Z0-9]{4,30}", iban):
-        problems.append("Wrong format (expected 2 letters, 2 digits, then up to 30 letters/digits).")
-    else:
-        country = iban[:2]
-        expected = UT_IBAN.get(country)
-        if expected is None:
-            problems.append(f"Unknown or unsupported country code `{country}`.")
-        elif len(iban) != expected:
-            problems.append(f"Length is {len(iban)} but {country} IBANs have {expected} characters.")
-        rearranged = iban[4:] + iban[:4]
-        numeric = "".join(str(int(c, 36)) for c in rearranged)
-        if int(numeric) % 97 != 1:
-            problems.append("The checksum is invalid.")
-    grouped = " ".join(iban[i:i + 4] for i in range(0, len(iban), 4))
-    if problems:
-        return await ut_send(message, "IBAN — Invalid ❌", f"`{ut_clip(grouped, 60)}`\n\n" + "\n".join(f"• {p}" for p in problems))
-    lines = [
-        f"`{grouped}`",
-        f"**Country:** {iban[:2]}",
-        f"**Check digits:** {iban[2:4]}",
-        f"**BBAN:** `{iban[4:]}`",
-        f"**Length:** {len(iban)}",
-    ]
-    await ut_send(message, "IBAN — Valid ✅", "\n".join(lines))
-
-
-async def c_ip(message, rest):
-    target = rest.split()[0] if rest else ""
-    if not target:
-        return await ut_usage(message, "`.ip <ip or domain>`")
-    try:
-        ip = str(ipaddress.ip_address(target))
-        if not ipaddress.ip_address(ip).is_global:
-            return await ut_fail(message, "That is a private or reserved address.")
-    except ValueError:
-        domain = ut_domain(target)
-        if not domain:
-            return await ut_fail(message, "Invalid IP address or domain.")
-        ip = await ut_public(domain)
-        if ip is None:
-            return await ut_fail(message, "Could not resolve a public IP for that domain.")
-    fields = "status,message,country,countryCode,regionName,city,zip,lat,lon,timezone,isp,org,as,reverse,mobile,proxy,hosting,query"
-    data = await ut_http(f"http://ip-api.com/json/{ip}", params={"fields": fields})
-    if not data or data.get("status") != "success":
-        return await ut_fail(message, "Lookup failed. Try again later.")
-    lines = [
-        f"**IP:** `{data['query']}`",
-        f"**Country:** {data.get('country')} ({data.get('countryCode')})",
-        f"**Region:** {data.get('regionName')}",
-        f"**City:** {data.get('city')} {data.get('zip') or ''}".strip(),
-        f"**Coordinates:** {data.get('lat')}, {data.get('lon')}",
-        f"**Timezone:** {data.get('timezone')}",
-        f"**ISP:** {data.get('isp')}",
-        f"**Organization:** {data.get('org') or 'N/A'}",
-        f"**AS:** {data.get('as') or 'N/A'}",
-        f"**Reverse DNS:** {data.get('reverse') or 'N/A'}",
-        f"**Mobile:** {'Yes' if data.get('mobile') else 'No'} • **Proxy:** {'Yes' if data.get('proxy') else 'No'} • **Hosting:** {'Yes' if data.get('hosting') else 'No'}",
-    ]
-    await ut_send(message, "IP Lookup", "\n".join(lines))
-
-
-async def c_json(message, rest):
-    text = ut_code(rest or ut_reply_text(message))
-    if not text:
-        return await ut_usage(message, "`.json <json text>`")
-    try:
-        obj = json.loads(text)
-    except json.JSONDecodeError as e:
-        lines = text.splitlines() or [text]
-        context = lines[e.lineno - 1] if 0 < e.lineno <= len(lines) else ""
-        body = f"**Error:** {e.msg}\n**Line {e.lineno}, column {e.colno}**\n" + ut_block(ut_clip(context, 200))
-        return await ut_send(message, "JSON — Invalid ❌", body)
-    pretty = json.dumps(obj, indent=2, ensure_ascii=False)
-    kind = type(obj).__name__
-    size = f"{len(obj)} item(s)" if isinstance(obj, (list, dict)) else "value"
-    await ut_send(message, "JSON — Valid ✅", f"**Type:** {kind} ({size})\n" + ut_block(ut_clip(pretty, 2800), "json"))
-
-
-def ut_b64url(part: str) -> bytes:
-    return base64.urlsafe_b64decode(part + "=" * (-len(part) % 4))
-
-
-async def c_jwt(message, rest):
-    token = ut_code(rest).strip()
-    parts = token.split(".")
-    if len(parts) != 3:
-        return await ut_usage(message, "`.jwt <token>`")
-    try:
-        header = json.loads(ut_b64url(parts[0]))
-        payload = json.loads(ut_b64url(parts[1]))
-    except Exception:
-        return await ut_fail(message, "That isn't a valid JWT.")
-    lines = [
-        "**Header**",
-        ut_block(json.dumps(header, indent=2), "json"),
-        "**Payload**",
-        ut_block(ut_clip(json.dumps(payload, indent=2, ensure_ascii=False), 1500), "json"),
-    ]
-    times = []
-    for key, label in (("iat", "Issued"), ("nbf", "Not before"), ("exp", "Expires")):
-        if isinstance(payload.get(key), (int, float)):
-            times.append(f"**{label}:** <t:{int(payload[key])}:F> (<t:{int(payload[key])}:R>)")
-    if times:
-        lines.append("\n".join(times))
-    if str(header.get("alg", "")).lower() == "none":
-        lines.append("⚠️ This token uses `alg: none` and is unsigned.")
-    lines.append("-# The signature is NOT verified.")
-    await ut_send(message, "JWT Decoded", "\n".join(lines))
-
-
-UT_LOREM = (
-    "lorem ipsum dolor sit amet consectetur adipiscing elit sed do eiusmod tempor incididunt ut labore et dolore magna aliqua "
-    "enim ad minim veniam quis nostrud exercitation ullamco laboris nisi aliquip ex ea commodo consequat duis aute irure in "
-    "reprehenderit voluptate velit esse cillum fugiat nulla pariatur excepteur sint occaecat cupidatat non proident sunt culpa "
-    "qui officia deserunt mollit anim id est laborum"
-).split()
-
-
-def ut_sentence() -> str:
-    words = [random.choice(UT_LOREM) for _ in range(random.randint(6, 14))]
-    return words[0].capitalize() + " " + " ".join(words[1:]) + "."
-
-
-async def c_lorem(message, rest):
-    count, unit = 1, "paragraphs"
-    for p in rest.lower().split():
-        if p.isdigit():
-            count = max(1, min(int(p), 20))
-        elif p.startswith("word"):
-            unit = "words"
-        elif p.startswith("sent"):
-            unit = "sentences"
-        elif p.startswith("para"):
-            unit = "paragraphs"
-    if unit == "words":
-        out = " ".join(random.choice(UT_LOREM) for _ in range(min(count, 300)))
-    elif unit == "sentences":
-        out = " ".join(ut_sentence() for _ in range(count))
-    else:
-        out = "\n\n".join(" ".join(ut_sentence() for _ in range(random.randint(3, 5))) for _ in range(min(count, 4)))
-    await ut_send(message, "Lorem Ipsum", ut_clip(out, 3000))
-
-
-UT_MORSE = {
-    "a": ".-", "b": "-...", "c": "-.-.", "d": "-..", "e": ".", "f": "..-.", "g": "--.", "h": "....", "i": "..",
-    "j": ".---", "k": "-.-", "l": ".-..", "m": "--", "n": "-.", "o": "---", "p": ".--.", "q": "--.-", "r": ".-.",
-    "s": "...", "t": "-", "u": "..-", "v": "...-", "w": ".--", "x": "-..-", "y": "-.--", "z": "--..",
-    "0": "-----", "1": ".----", "2": "..---", "3": "...--", "4": "....-", "5": ".....", "6": "-....", "7": "--...",
-    "8": "---..", "9": "----.", ".": ".-.-.-", ",": "--..--", "?": "..--..", "!": "-.-.--", "'": ".----.",
-    "/": "-..-.", "(": "-.--.", ")": "-.--.-", "&": ".-...", ":": "---...", ";": "-.-.-.", "=": "-...-",
-    "+": ".-.-.", "-": "-....-", "_": "..--.-", '"': ".-..-.", "@": ".--.-.",
-}
-UT_MORSE_REV = {v: k for k, v in UT_MORSE.items()}
-
-
-async def c_morse(message, rest):
-    parts = rest.split(None, 1)
-    if not parts:
-        return await ut_usage(message, "`.morse <encode|decode> <text>`")
-    mode = parts[0].lower()
-    if mode in ("encode", "decode"):
-        text = parts[1] if len(parts) > 1 else ut_reply_text(message)
-    else:
-        text = rest
-        mode = "decode" if re.fullmatch(r"[.\-/\s_•−]+", rest) else "encode"
-    if not text:
-        return await ut_usage(message, "`.morse <encode|decode> <text>`")
-    if mode == "encode":
-        out = " / ".join(" ".join(UT_MORSE.get(c, "?") for c in word) for word in text.lower().split())
-    else:
-        norm = text.replace("•", ".").replace("−", "-").replace("_", "-")
-        out = " ".join("".join(UT_MORSE_REV.get(code, "?") for code in word.split()) for word in re.split(r"\s*/\s*|\s{3,}", norm.strip()))
-    await ut_send(message, f"Morse {mode.title()}", ut_block(ut_clip(out, 1800)))
-
-
-async def c_password(message, rest):
-    length, symbols, digits = 16, True, True
-    for a in rest.lower().split():
-        if a.isdigit():
-            length = max(8, min(int(a), 64))
-        elif a in ("nosymbols", "nosym"):
-            symbols = False
-        elif a in ("nonumbers", "nonum"):
-            digits = False
-    pools = [string.ascii_lowercase, string.ascii_uppercase]
-    if digits:
-        pools.append(string.digits)
-    if symbols:
-        pools.append("!@#$%^&*()-_=+[]{};:,.?")
-    alphabet = "".join(pools)
-    while True:
-        pw = "".join(secrets.choice(alphabet) for _ in range(length))
-        if all(any(c in pool for c in pw) for pool in pools):
-            break
-    try:
-        await message.author.send(view=ut_view("Your Password", f"```{pw}```\n-# Length: {length}. Generated with a cryptographically secure generator."))
-    except discord.Forbidden:
-        return await ut_fail(message, "I couldn't DM you. Enable DMs from server members and try again.")
-    await ut_send(message, "Password", "I sent your new password to your DMs. 🔐")
-
-
-UT_REGEX_CODE = (
-    "import re,sys,json\n"
-    "d=json.loads(sys.stdin.read())\n"
-    "try:\n"
-    " r=re.compile(d['p'])\n"
-    " out=[]\n"
-    " for m in r.finditer(d['t']):\n"
-    "  out.append({'m':m.group(0),'s':m.start(),'e':m.end(),'g':list(m.groups()),'n':m.groupdict()})\n"
-    "  if len(out)>=25: break\n"
-    " print(json.dumps({'ok':out}))\n"
-    "except re.error as e:\n"
-    " print(json.dumps({'err':str(e)}))\n"
-)
-
-
-async def c_regex(message, rest):
-    if "\n" in rest:
-        pattern, _, text = rest.partition("\n")
-    elif " | " in rest:
-        pattern, _, text = rest.partition(" | ")
-    else:
-        return await ut_usage(message, "`.regex <pattern> | <text>`")
-    pattern = ut_code(pattern).strip()
-    text = text.strip()
-    if not pattern or not text:
-        return await ut_usage(message, "`.regex <pattern> | <text>`")
-    if len(pattern) > 300 or len(text) > 2000:
-        return await ut_fail(message, "Pattern (max 300) or text (max 2000) is too long.")
-    proc = await asyncio.create_subprocess_exec(
-        sys.executable, "-c", UT_REGEX_CODE,
-        stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL
-    )
-    try:
-        out, _ = await asyncio.wait_for(proc.communicate(json.dumps({"p": pattern, "t": text}).encode()), 3)
-    except asyncio.TimeoutError:
-        proc.kill()
-        return await ut_fail(message, "The pattern took too long to run (possible catastrophic backtracking).")
-    try:
-        res = json.loads(out.decode())
-    except Exception:
-        return await ut_fail(message, "Could not run that pattern.")
-    if "err" in res:
-        return await ut_fail(message, f"Invalid pattern: `{ut_clip(res['err'], 150)}`")
-    matches = res["ok"]
-    if not matches:
-        return await ut_send(message, "Regex — No Match", f"**Pattern:** `{ut_clip(pattern, 200)}`")
-    lines = [f"**Pattern:** `{ut_clip(pattern, 200)}`", f"**Matches:** {len(matches)}{'+' if len(matches) >= 25 else ''}", ""]
-    for i, m in enumerate(matches[:12], 1):
-        line = f"{i}. `{ut_clip(m['m'], 80)}` ({m['s']}–{m['e']})"
-        if m["g"]:
-            line += " groups: " + ", ".join(f"`{ut_clip(str(g), 40)}`" for g in m["g"])
-        lines.append(line)
-    await ut_send(message, "Regex — Match ✅", "\n".join(lines))
-
-
-async def c_rot13(message, rest):
-    text = rest or ut_reply_text(message)
-    if not text:
-        return await ut_usage(message, "`.rot13 <text>`")
-    await ut_send(message, "ROT13", ut_block(ut_clip(codecs.encode(text, "rot_13"), 1800)))
-
-
-async def c_slugify(message, rest):
-    text = rest or ut_reply_text(message)
-    if not text:
-        return await ut_usage(message, "`.slugify <text>`")
-    norm = unicodedata.normalize("NFKD", text).encode("ascii", "ignore").decode()
-    slug = re.sub(r"-{2,}", "-", re.sub(r"[^a-z0-9]+", "-", norm.lower())).strip("-")
-    await ut_send(message, "Slugify", f"`{slug or '(empty)'}`")
-
-
-def ut_ssl_sync(host: str, ip: str):
-    ctx = ssl.create_default_context()
-    with socket.create_connection((ip, 443), timeout=6) as sock:
-        with ctx.wrap_socket(sock, server_hostname=host) as s:
-            return s.getpeercert(), s.version(), s.cipher()[0]
-
-
-async def c_sslcheck(message, rest):
-    domain = ut_domain(rest.split()[0]) if rest else None
-    if not domain:
-        return await ut_usage(message, "`.sslcheck <domain>`")
-    ip = await ut_public(domain)
-    if ip is None:
-        return await ut_fail(message, "Could not resolve a public address for that domain.")
-    try:
-        cert, version, cipher = await asyncio.wait_for(asyncio.get_running_loop().run_in_executor(None, ut_ssl_sync, domain, ip), 10)
-    except ssl.SSLCertVerificationError as e:
-        return await ut_send(message, f"SSL — {domain}", f"❌ **Certificate verification failed**\n{ut_clip(str(e.verify_message), 200)}")
-    except Exception as e:
-        return await ut_fail(message, f"Could not complete the TLS handshake: `{type(e).__name__}`")
-    subject = dict(x[0] for x in cert.get("subject", ()))
-    issuer = dict(x[0] for x in cert.get("issuer", ()))
-    end = ssl.cert_time_to_seconds(cert["notAfter"])
-    start = ssl.cert_time_to_seconds(cert["notBefore"])
-    days = (end - time.time()) / 86400
-    sans = [v for k, v in cert.get("subjectAltName", ()) if k == "DNS"]
-    status = "✅ Valid" if days > 0 else "❌ Expired"
-    lines = [
-        f"**Status:** {status} ({int(days)} days left)" if days > 0 else f"**Status:** {status}",
-        f"**Subject:** {subject.get('commonName', 'N/A')}",
-        f"**Issuer:** {issuer.get('organizationName', issuer.get('commonName', 'N/A'))}",
-        f"**Valid from:** <t:{int(start)}:F>",
-        f"**Valid until:** <t:{int(end)}:F> (<t:{int(end)}:R>)",
-        f"**Protocol:** {version} • **Cipher:** {cipher}",
-        f"**Alt names ({len(sans)}):** {ut_clip(', '.join(sans[:10]), 400)}",
-    ]
-    await ut_send(message, f"SSL — {domain}", "\n".join(lines))
-
-
 def ut_todos(uid: int) -> list:
     return config.setdefault("todos", {}).setdefault(str(uid), [])
 
@@ -6901,7 +4504,7 @@ def ut_todos(uid: int) -> list:
 def ut_todo_view(items: list) -> str:
     if not items:
         return "Your todo list is empty. Add one with `.todo add <task>`."
-    return "\n".join(f"{i}. {'~~' + t['t'] + '~~ ✅' if t['d'] else '⬜ ' + t['t']}" for i, t in enumerate(items, 1))
+    return "\n".join(f"{i}. {'~~' + t['t'] + '~~' if t['d'] else '' + t['t']}" for i, t in enumerate(items, 1))
 
 
 async def c_todo(message, rest):
@@ -6942,137 +4545,12 @@ async def c_todo(message, rest):
     await ut_send(message, f"{message.author.display_name}'s Todo", ut_todo_view(items))
 
 
-async def c_urlencode(message, rest):
-    parts = rest.split(None, 1)
-    if not parts:
-        return await ut_usage(message, "`.urlencode <encode|decode> <text>`")
-    mode = parts[0].lower()
-    if mode in ("encode", "decode"):
-        text = parts[1] if len(parts) > 1 else ut_reply_text(message)
-    else:
-        mode, text = "encode", rest
-    if not text:
-        return await ut_usage(message, "`.urlencode <encode|decode> <text>`")
-    out = urllib.parse.quote(text, safe="") if mode == "encode" else urllib.parse.unquote(text)
-    await ut_send(message, f"URL {mode.title()}", ut_block(ut_clip(out, 1800)))
-
-
-async def c_useragent(message, rest):
-    ua = ut_code(rest)
-    if not ua:
-        return await ut_usage(message, "`.useragent <user-agent string>`")
-    browser = "Unknown"
-    for name, pat in (("Edge", r"Edg(?:e|A|iOS)?/([\d.]+)"), ("Opera", r"OPR/([\d.]+)"), ("Samsung Internet", r"SamsungBrowser/([\d.]+)"),
-                      ("Firefox", r"(?:Firefox|FxiOS)/([\d.]+)"), ("Chrome", r"(?:Chrome|CriOS)/([\d.]+)"),
-                      ("Safari", r"Version/([\d.]+).*Safari"), ("Internet Explorer", r"(?:MSIE |rv:)([\d.]+).*(?:Trident|MSIE)|Trident.*rv:([\d.]+)")):
-        m = re.search(pat, ua)
-        if m:
-            browser = f"{name} {next((g for g in m.groups() if g), '')}".strip()
-            break
-    os_name = "Unknown"
-    for name, pat in (("Windows", r"Windows NT ([\d.]+)"), ("Android", r"Android ([\d.]+)"), ("iOS", r"(?:iPhone|CPU) OS ([\d_]+)"),
-                      ("macOS", r"Mac OS X ([\d_.]+)"), ("Chrome OS", r"CrOS \S+ ([\d.]+)"), ("Linux", r"(Linux)")):
-        m = re.search(pat, ua)
-        if m:
-            ver = m.group(1).replace("_", ".")
-            os_name = name if name == "Linux" else f"{name} {ver}"
-            break
-    if re.search(r"bot|crawl|spider|slurp", ua, re.I):
-        device = "Bot / Crawler"
-    elif re.search(r"iPad|Tablet", ua):
-        device = "Tablet"
-    elif re.search(r"Mobi|iPhone|Android.*Mobile", ua):
-        device = "Mobile"
-    else:
-        device = "Desktop"
-    engine = "Unknown"
-    for name, pat in (("Blink/WebKit", r"AppleWebKit/([\d.]+)"), ("Gecko", r"Gecko/([\d.]+)"), ("Trident", r"Trident/([\d.]+)")):
-        m = re.search(pat, ua)
-        if m:
-            engine = f"{name} {m.group(1)}"
-            break
-    lines = [f"**Browser:** {browser}", f"**OS:** {os_name}", f"**Device:** {device}", f"**Engine:** {engine}", "", ut_block(ut_clip(ua, 500))]
-    await ut_send(message, "User Agent", "\n".join(lines))
-
-
-async def c_uuid(message, rest):
-    count = 1
-    if rest.strip().isdigit():
-        count = max(1, min(int(rest.strip()), 10))
-    await ut_send(message, "UUID v4", ut_block("\n".join(str(uuid.uuid4()) for _ in range(count))))
-
-
-async def c_whois(message, rest):
-    domain = ut_domain(rest.split()[0]) if rest else None
-    if not domain:
-        return await ut_usage(message, "`.whois <domain>`")
-    data = await ut_http(f"https://rdap.org/domain/{domain}", headers={**UT_UA, "Accept": "application/rdap+json"}, timeout=12)
-    if not data:
-        return await ut_fail(message, "No registration data found. The TLD may not support RDAP.")
-    events = {e.get("eventAction"): e.get("eventDate") for e in data.get("events", [])}
-    registrar = None
-    for ent in data.get("entities", []):
-        if "registrar" in ent.get("roles", []):
-            for item in ent.get("vcardArray", [None, []])[1]:
-                if item[0] == "fn":
-                    registrar = item[3]
-    nameservers = [n.get("ldhName", "").lower() for n in data.get("nameservers", [])]
-
-    def fmt(s):
-        if not s:
-            return "N/A"
-        try:
-            dt = datetime.fromisoformat(s.replace("Z", "+00:00"))
-            return f"<t:{int(dt.timestamp())}:F>"
-        except ValueError:
-            return s
-
-    lines = [
-        f"**Domain:** {data.get('ldhName', domain)}",
-        f"**Registrar:** {registrar or 'N/A'}",
-        f"**Registered:** {fmt(events.get('registration'))}",
-        f"**Last changed:** {fmt(events.get('last changed'))}",
-        f"**Expires:** {fmt(events.get('expiration'))}",
-        f"**Status:** {ut_clip(', '.join(data.get('status', [])) or 'N/A', 300)}",
-        f"**Nameservers:** {ut_clip(', '.join(nameservers) or 'N/A', 400)}",
-    ]
-    await ut_send(message, f"WHOIS — {domain}", "\n".join(lines))
-
-
-async def c_wordcount(message, rest):
-    text = ut_code(rest or ut_reply_text(message))
-    if not text:
-        return await ut_usage(message, "`.wordcount <text>` (or reply to a message)")
-    words = re.findall(r"\S+", text)
-    no_space = len(re.sub(r"\s", "", text))
-    sentences = len([x for x in re.split(r"[.!?]+", text) if x.strip()])
-    paragraphs = len([x for x in re.split(r"\n\s*\n", text) if x.strip()])
-    lines = [
-        f"**Words:** {len(words):,}",
-        f"**Unique words:** {len({w.lower().strip('.,!?;:') for w in words}):,}",
-        f"**Characters:** {len(text):,}",
-        f"**Characters (no spaces):** {no_space:,}",
-        f"**Lines:** {len(text.splitlines()):,}",
-        f"**Sentences:** {sentences:,}",
-        f"**Paragraphs:** {paragraphs:,}",
-        f"**Average word length:** {sum(len(w) for w in words) / len(words):.1f}",
-        f"**Reading time:** ~{max(1, round(len(words) / 200))} min",
-    ]
-    await ut_send(message, "Word Count", "\n".join(lines))
-
-
 UTIL_CMDS = {
-    "userinfo": c_userinfo, "serverinfo": c_serverinfo, "roleinfo": c_roleinfo, "channelinfo": c_channelinfo,
-    "inviteinfo": c_inviteinfo, "banner": c_banner, "botinfo": c_botinfo, "stats": c_stats,
-    "qr": c_qr, "translate": c_translate, "color": c_color, "math": c_math, "timestamp": c_timestamp,
-    "urban": c_urban, "stealsticker": c_stealsticker, "emojis": c_emojis, "activity": c_activity,
-    "ascii": c_ascii, "base": c_base, "base32": ut_codec("base32"), "base64": ut_codec("base64"),
-    "binary": ut_codec("binary"), "char": c_char, "cidr": c_cidr, "counting": c_counting,
-    "diff": c_diff, "dns": c_dns, "entropy": c_entropy, "expand": c_expand, "hash": c_hash,
-    "httpstatus": c_httpstatus, "iban": c_iban, "ip": c_ip, "json": c_json, "jwt": c_jwt,
-    "lorem": c_lorem, "morse": c_morse, "password": c_password, "regex": c_regex, "rot13": c_rot13,
-    "slugify": c_slugify, "sslcheck": c_sslcheck, "todo": c_todo, "urlencode": c_urlencode,
-    "useragent": c_useragent, "uuid": c_uuid, "whois": c_whois, "wordcount": c_wordcount,
+    "userinfo": c_userinfo, "serverinfo": c_serverinfo, "roleinfo": c_roleinfo, "banner": c_banner,
+    "botinfo": c_botinfo, "stats": c_stats, "stealsticker": c_stealsticker, "emojis": c_emojis,
+    "activity": c_activity, "ascii": c_ascii, "base": c_base, "base32": ut_codec("base32"),
+    "base64": ut_codec("base64"), "binary": ut_codec("binary"), "char": c_char, "cidr": c_cidr,
+    "counting": c_counting, "todo": c_todo,
 }
 
 
@@ -7096,24 +4574,23 @@ async def util_prefix(message: discord.Message, cmd: str, args: list) -> bool:
 
 
 ACTION_STYLE.update({
-    "DM": ("✉️", discord.Color.blurple()),
-    "Softban": ("🔨", discord.Color.orange()),
-    "Jail": ("⛓️", discord.Color.red()),
-    "Unjail": ("🔓", discord.Color.green()),
-    "Honeypot": ("🍯", discord.Color.red()),
-    "Mass Purge": ("🗑️", discord.Color.blurple()),
-    "Mass Role": ("🎭", discord.Color.blurple()),
-    "Role All": ("🎭", discord.Color.blurple()),
-    "Force Nick": ("✏️", discord.Color.blurple()),
-    "Restrict": ("🚫", discord.Color.orange()),
-    "Unrestrict": ("✅", discord.Color.green()),
-    "Mod Note": ("📝", discord.Color.blurple()),
-    "Move All": ("🔀", discord.Color.blurple()),
-    "Pic Perms": ("🖼️", discord.Color.orange()),
-    "Suggestion Review": ("💡", discord.Color.gold()),
-    "ModMail": ("📩", discord.Color.blurple()),
-    "Staff Roles": ("🛡️", discord.Color.blurple()),
-    "Extra Owner": ("👑", discord.Color.gold()),
+    "DM": ("", discord.Color.blurple()),
+    "Softban": ("", discord.Color.orange()),
+    "Jail": ("", discord.Color.red()),
+    "Unjail": ("", discord.Color.green()),
+    "Honeypot": ("", discord.Color.red()),
+    "Mass Purge": ("", discord.Color.blurple()),
+    "Mass Role": ("", discord.Color.blurple()),
+    "Role All": ("", discord.Color.blurple()),
+    "Force Nick": ("", discord.Color.blurple()),
+    "Restrict": ("", discord.Color.orange()),
+    "Unrestrict": ("", discord.Color.green()),
+    "Mod Note": ("", discord.Color.blurple()),
+    "Move All": ("", discord.Color.blurple()),
+    "Pic Perms": ("", discord.Color.orange()),
+    "ModMail": ("", discord.Color.blurple()),
+    "Staff Roles": ("", discord.Color.blurple()),
+    "Extra Owner": ("", discord.Color.gold()),
 })
 
 MX_NO_MENTIONS = discord.AllowedMentions.none()
@@ -7140,9 +4617,6 @@ def mx_cfg() -> dict:
         "staffroles": [],
         "sticky": {},
         "sticky_on": False,
-        "suggest": {},
-        "suggestions": {},
-        "suggest_id": 0,
     }
     for key, value in defaults.items():
         store.setdefault(key, value)
@@ -7531,7 +5005,7 @@ def mx_hp_view(hp: dict) -> discord.ui.LayoutView:
         discord.ui.Container(
             section,
             discord.ui.ActionRow(
-                discord.ui.Button(label=f"{MX_HP_LABELS.get(kind, 'Hits')}: {hp.get('count', 0)}", emoji="🍯", style=discord.ButtonStyle.secondary, disabled=True)
+                discord.ui.Button(label=f"{MX_HP_LABELS.get(kind, 'Hits')}: {hp.get('count', 0)}", style=discord.ButtonStyle.secondary, disabled=True)
             )
         )
     )
@@ -7830,12 +5304,12 @@ async def mx_modmail(ctx, action: str, category=None, text: str = None, member=N
             await user.send(clip(f"**{ctx.user.display_name} (Staff):** {text}", 2000))
         except discord.Forbidden:
             return await ctx.send(err("That user has their DMs closed."), ephemeral=True)
-        return await ctx.send(mx_card(f"✉️ Reply from {ctx.user.display_name}", text, discord.Color.green()))
+        return await ctx.send(mx_card(f"Reply from {ctx.user.display_name}", text, discord.Color.green()))
     if action == "close":
         reason = (text or "").strip() or "No reason provided"
         if user is not None:
             try:
-                await user.send(f"📪 Your ModMail thread in **{guild.name}** was closed.\n**Reason:** {clip(reason, 500)}")
+                await user.send(f"Your ModMail thread in **{guild.name}** was closed.\n**Reason:** {clip(reason, 500)}")
             except Exception:
                 pass
         cfg.get("threads", {}).pop(str(uid), None)
@@ -7901,16 +5375,16 @@ async def mx_modmail_dm(message) -> bool:
             f"**Joined:** {('<t:' + str(int(member.joined_at.timestamp())) + ':R>') if member.joined_at else 'Unknown'}\n\n"
             f"Reply with `{PREFIX}modmail reply <text>` or `/modmail`. Close with `{PREFIX}modmail close [reason]`."
         )
-        await channel.send(view=mx_card("📩 New ModMail Thread", info, discord.Color.green()), allowed_mentions=MX_NO_MENTIONS)
+        await channel.send(view=mx_card("New ModMail Thread", info, discord.Color.green()), allowed_mentions=MX_NO_MENTIONS)
     body = message.content or ""
     if message.attachments:
         body += "\n" + "\n".join(a.url for a in message.attachments)
     body = body.strip() or "*No text content*"
-    await channel.send(view=mx_card(f"💬 {member.display_name}", body, discord.Color.blurple()), allowed_mentions=MX_NO_MENTIONS)
+    await channel.send(view=mx_card(f"{member.display_name}", body, discord.Color.blurple()), allowed_mentions=MX_NO_MENTIONS)
     try:
         await message.add_reaction("✅")
         if created:
-            await message.channel.send("📨 Your message was sent to the staff team. They'll reply here soon.")
+            await message.channel.send("Your message was sent to the staff team. They'll reply here soon.")
     except Exception:
         pass
     return True
@@ -8122,7 +5596,7 @@ async def mx_staffroles(ctx, action: str, role=None):
     ids = mx_cfg()["staffroles"]
     if action == "list":
         text = "\n".join(f"<@&{i}>" for i in ids) or "No staff roles set."
-        return await ctx.send(ok("Staff Roles", text + "\n\nThese roles are exempt from automod, honeypot and ModMail access."))
+        return await ctx.send(ok("Staff Roles", text + "\n\nThese roles are exempt from the honeypot and can see ModMail threads."))
     if role is None:
         return await ctx.send(err("Provide a role."), ephemeral=True)
     if action == "add":
@@ -8130,13 +5604,13 @@ async def mx_staffroles(ctx, action: str, role=None):
             return await ctx.send(err("That role is already a staff role."), ephemeral=True)
         ids.append(role.id)
         mx_save()
-        await ctx.send(ok("Staff Role Added", f"{role.mention} is now exempt from automod."))
+        await ctx.send(ok("Staff Role Added", f"{role.mention} is now a staff role."))
         return await log_mod(ctx.guild, "Staff Roles", ctx.user, None, None, f"**Added:** {role.mention}")
     if role.id not in ids:
         return await ctx.send(err("That role isn't a staff role."), ephemeral=True)
     ids.remove(role.id)
     mx_save()
-    await ctx.send(ok("Staff Role Removed", f"{role.mention} is no longer exempt from automod."))
+    await ctx.send(ok("Staff Role Removed", f"{role.mention} is no longer a staff role."))
     await log_mod(ctx.guild, "Staff Roles", ctx.user, None, None, f"**Removed:** {role.mention}")
 
 
@@ -8153,81 +5627,6 @@ async def mx_stickyroles(ctx, action: str):
     await ctx.send(ok("Sticky Roles", "Roles will be re-applied when members rejoin." if cfg["sticky_on"] else "Sticky roles disabled and saved roles cleared."))
 
 
-def mx_suggest_view(n: int, author_id: int, text: str, status: str = "Pending", reviewer_id: int = None, reason: str = None):
-    colors = {"Pending": discord.Color.blurple(), "Approved": discord.Color.green(), "Denied": discord.Color.red()}
-    body = f"**From:** <@{author_id}>\n\n{clip(text, 1500)}\n\n**Status:** {status}"
-    if reviewer_id:
-        body += f"\n**Reviewed by:** <@{reviewer_id}>"
-    if reason:
-        body += f"\n**Reason:** {clip(reason, 500)}"
-    return mx_card(f"💡 Suggestion #{n}", body, colors.get(status, discord.Color.blurple()))
-
-
-async def mx_suggest(ctx, text: str):
-    cfg = mx_cfg()
-    channel = ctx.guild.get_channel(cfg["suggest"].get("channel", 0))
-    if channel is None:
-        return await ctx.send(err("The suggestions board isn't set up yet."), ephemeral=True)
-    text = (text or "").strip()
-    if not text:
-        return await ctx.send(err("Write your suggestion."), ephemeral=True)
-    cfg["suggest_id"] += 1
-    n = cfg["suggest_id"]
-    msg = await channel.send(view=mx_suggest_view(n, ctx.user.id, text), allowed_mentions=MX_NO_MENTIONS)
-    for emoji in ("👍", "👎"):
-        try:
-            await msg.add_reaction(emoji)
-        except Exception:
-            pass
-    cfg["suggestions"][str(n)] = {"message": msg.id, "channel": channel.id, "user": ctx.user.id, "text": clip(text, 1500), "status": "Pending"}
-    mx_save()
-    await ctx.send(ok("Suggestion Sent", f"Your suggestion **#{n}** was posted in {channel.mention}."), ephemeral=True)
-
-
-async def mx_suggestions(ctx, action: str, channel=None, number: int = None, reason: str = None):
-    cfg = mx_cfg()
-    if action in ("setup", "off", "status"):
-        if not mx_can(ctx.user, "manage_guild"):
-            return await mx_deny(ctx)
-    elif not mx_can(ctx.user, "manage_messages"):
-        return await mx_deny(ctx)
-    if action == "setup":
-        if channel is None:
-            return await ctx.send(err("Provide a channel."), ephemeral=True)
-        cfg["suggest"] = {"channel": channel.id}
-        mx_save()
-        return await ctx.send(ok("Suggestions Board Set", f"Suggestions will be posted in {channel.mention}. Members use `{PREFIX}suggest` or `/suggest`."))
-    if action == "off":
-        cfg["suggest"] = {}
-        mx_save()
-        return await ctx.send(ok("Suggestions Disabled", "The suggestions board was removed."))
-    if action == "status":
-        ch = cfg["suggest"].get("channel")
-        pending = sum(1 for s in cfg["suggestions"].values() if s["status"] == "Pending")
-        return await ctx.send(ok("Suggestions", f"**Channel:** {('<#' + str(ch) + '>') if ch else 'Not set'}\n**Total:** {len(cfg['suggestions'])}\n**Pending:** {pending}"))
-    if number is None or str(number) not in cfg["suggestions"]:
-        return await ctx.send(err("Provide a valid suggestion number."), ephemeral=True)
-    entry = cfg["suggestions"][str(number)]
-    status = "Approved" if action == "approve" else "Denied"
-    entry["status"] = status
-    mx_save()
-    ch = ctx.guild.get_channel(entry["channel"])
-    if ch is not None:
-        try:
-            msg = await ch.fetch_message(entry["message"])
-            await msg.edit(view=mx_suggest_view(number, entry["user"], entry["text"], status, ctx.user.id, reason))
-        except Exception:
-            pass
-    author = ctx.guild.get_member(entry["user"])
-    if author is not None:
-        try:
-            await author.send(f"💡 Your suggestion **#{number}** in **{ctx.guild.name}** was **{status.lower()}**." + (f"\n**Reason:** {clip(reason, 500)}" if reason else ""))
-        except Exception:
-            pass
-    await ctx.send(ok("Suggestion Reviewed", f"**Suggestion:** #{number}\n**Status:** {status}"))
-    await log_mod(ctx.guild, "Suggestion Review", ctx.user, None, reason, f"**Suggestion:** #{number} {status}")
-
-
 async def mx_extraowner(ctx, action: str, member=None):
     if ctx.user.id != ctx.guild.owner_id:
         return await ctx.send(err("Only the server owner can manage extra owners."), ephemeral=True)
@@ -8242,7 +5641,7 @@ async def mx_extraowner(ctx, action: str, member=None):
             return await ctx.send(err("That user already has owner-level access."), ephemeral=True)
         ids.append(member.id)
         save_config(config)
-        await ctx.send(ok("Extra Owner Added", f"{member.mention} now has owner-level access to Guild Protection."))
+        await ctx.send(ok("Extra Owner Added", f"{member.mention} is now a trusted user with owner-level access to the staff commands."))
         return await log_mod(ctx.guild, "Extra Owner", ctx.user, member, None, "**Added**")
     if member.id not in ids:
         return await ctx.send(err("That user isn't an extra owner."), ephemeral=True)
@@ -8637,28 +6036,6 @@ async def mxp_stickyroles(ctx, message, args):
     await mx_stickyroles(ctx, sub)
 
 
-async def mxp_suggest(ctx, message, args):
-    text = mx_tail(message, 1)
-    if not text:
-        return await ctx.send(err(f"Usage: `{PREFIX}suggest <your suggestion>`"))
-    await mx_suggest(ctx, text)
-
-
-async def mxp_suggestions(ctx, message, args):
-    sub = args[1].lower() if len(args) > 1 else "status"
-    if sub == "setup":
-        channel = mx_first(mx_channels(message, args[2:]))
-        if channel is None:
-            return await ctx.send(err(f"Usage: `{PREFIX}suggestions setup #channel`"))
-        return await mx_suggestions(ctx, "setup", channel)
-    if sub in ("off", "status"):
-        return await mx_suggestions(ctx, sub)
-    if sub in ("approve", "deny"):
-        number = int(args[2]) if len(args) > 2 and args[2].isdigit() else None
-        return await mx_suggestions(ctx, sub, number=number, reason=mx_tail(message, 3) or None)
-    await ctx.send(err(f"Usage: `{PREFIX}suggestions <setup|off|status|approve|deny>`"))
-
-
 async def mxp_extraowner(ctx, message, args):
     sub = args[1].lower() if len(args) > 1 else "list"
     if sub not in ("add", "remove", "list"):
@@ -8688,8 +6065,6 @@ MX_PREFIX = {
     "softban": mxp_softban,
     "staffroles": mxp_staffroles,
     "stickyroles": mxp_stickyroles,
-    "suggest": mxp_suggest,
-    "suggestions": mxp_suggestions,
     "extraowner": mxp_extraowner,
 }
 
@@ -8908,7 +6283,7 @@ async def softban_slash(interaction: discord.Interaction, user: discord.User, re
     await mx_guard(ctx, mx_softban(ctx, target, reason))
 
 
-@tree.command(name="staffroles", description="Designate staff roles that are exempt from automod", guild=GUILD_OBJ)
+@tree.command(name="staffroles", description="Designate staff roles and moderators", guild=GUILD_OBJ)
 @discord.app_commands.describe(action="Add, remove or list", role="Role to change")
 @discord.app_commands.choices(action=mx_choices("add", "remove", "list"))
 @discord.app_commands.default_permissions(administrator=True)
@@ -8926,827 +6301,13 @@ async def stickyroles_slash(interaction: discord.Interaction, action: discord.ap
     await mx_guard(ctx, mx_stickyroles(ctx, action.value))
 
 
-@tree.command(name="suggest", description="Post a suggestion on the suggestions board", guild=GUILD_OBJ)
-@discord.app_commands.describe(text="Your suggestion")
-async def suggest_slash(interaction: discord.Interaction, text: str):
-    ctx = MxCtx(interaction)
-    await mx_guard(ctx, mx_suggest(ctx, text))
-
-
-@tree.command(name="suggestions", description="Configure the suggestions board and review suggestions", guild=GUILD_OBJ)
-@discord.app_commands.describe(action="What to do", channel="Board channel (setup)", number="Suggestion number", reason="Reason for the decision")
-@discord.app_commands.choices(action=mx_choices("setup", "off", "status", "approve", "deny"))
-@discord.app_commands.default_permissions(manage_messages=True)
-async def suggestions_slash(
-    interaction: discord.Interaction,
-    action: discord.app_commands.Choice[str],
-    channel: discord.TextChannel = None,
-    number: int = None,
-    reason: str = None
-):
-    ctx = MxCtx(interaction)
-    await mx_guard(ctx, mx_suggestions(ctx, action.value, channel, number, reason))
-
-
-@tree.command(name="extraowner", description="Grant trusted users owner-level access to Guild Protection", guild=GUILD_OBJ)
+@tree.command(name="extraowner", description="Grant trusted users owner-level access to the staff commands", guild=GUILD_OBJ)
 @discord.app_commands.describe(action="Add, remove or list", member="Member to change")
 @discord.app_commands.choices(action=mx_choices("add", "remove", "list"))
 @discord.app_commands.default_permissions(administrator=True)
 async def extraowner_slash(interaction: discord.Interaction, action: discord.app_commands.Choice[str], member: discord.Member = None):
     ctx = MxCtx(interaction)
     await mx_guard(ctx, mx_extraowner(ctx, action.value, member))
-
-
-AM_FILTERS = [
-    ("badwords", "Bad Words", "Block slurs and profanity"),
-    ("everyone", "@everyone", "Block unauthorized @everyone / @here"),
-    ("mention", "Mass Mention", "Block messages with many mentions"),
-    ("spam", "Spam", "Block fast repeated messages"),
-    ("invites", "Invite Links", "Block Discord invite links"),
-    ("links", "All Links", "Block any external link"),
-    ("caps", "Excessive Caps", "Block messages that are mostly caps"),
-    ("status", "Custom Status", "Act on invite links, scam links and filtered words in custom statuses"),
-]
-AM_FILTER_KEYS = [k for k, _, _ in AM_FILTERS]
-AM_ACTIONS = [
-    ("delete", "Delete only"),
-    ("warn", "Delete + Warn"),
-    ("mute", "Delete + Mute"),
-    ("kick", "Delete + Kick"),
-    ("ban", "Delete + Ban"),
-]
-AM_ACTION_LABELS = dict(AM_ACTIONS)
-AM_DEFAULT_WORDS = [
-    "fuck*", "fuk", "shit*", "bitch*", "asshole*", "bastard*", "cunt*", "dickhead*", "motherfucker*",
-    "slut*", "whore*", "nigger*", "nigga*", "faggot*", "fag", "retard*", "tranny", "kys",
-    "putangina", "putang ina", "tangina", "tang ina", "gago", "ulol", "pakyu", "tarantado", "pakshet", "puta", "bobo", "tanga",
-]
-AM_LEET = str.maketrans({"0": "o", "1": "i", "3": "e", "4": "a", "5": "s", "7": "t", "@": "a", "$": "s"})
-AM_SCAM_RE = re.compile(
-    r"(?:discord\.gift|discordapp\.gift|steamcommunity\.com/gift|free\s+nitro|nitro\s+(?:for\s+free|gift)|claim\s+(?:your\s+)?(?:free\s+)?(?:nitro|gift)|disc[o0]rd[a-z\-]*\.(?:gift|gifts|click|ru))",
-    re.I
-)
-AM_CACHE = {"key": None, "regex": None}
-AM_STATUS_SEEN = {}
-
-
-def am_cfg() -> dict:
-    store = config.setdefault("automod", {})
-    defaults = {
-        "enabled": True,
-        "action": "delete",
-        "mute_minutes": 10,
-        "words": [],
-        "log": 0,
-        "filters": {},
-        "exempt_roles": [],
-        "exempt_channels": [],
-        "caps_ratio": 70,
-        "caps_min": 10,
-    }
-    for key, value in defaults.items():
-        store.setdefault(key, value)
-    for key in ("badwords", "everyone", "caps", "status"):
-        store["filters"].setdefault(key, False)
-    return store
-
-
-def am_get(key: str) -> bool:
-    if key == "mention":
-        return sec_cfg("antimention")["enabled"]
-    if key == "spam":
-        return sec_cfg("antispam")["enabled"]
-    if key == "invites":
-        link = sec_cfg("antilink")
-        return link["enabled"] and link["invites"]
-    if key == "links":
-        link = sec_cfg("antilink")
-        return link["enabled"] and link["links"]
-    return bool(am_cfg()["filters"].get(key))
-
-
-def am_set(key: str, state: bool):
-    if key == "mention":
-        sec_cfg("antimention")["enabled"] = state
-    elif key == "spam":
-        sec_cfg("antispam")["enabled"] = state
-    elif key in ("invites", "links"):
-        link = sec_cfg("antilink")
-        link[key] = state
-        link["enabled"] = bool(link["invites"] or link["links"])
-    else:
-        am_cfg()["filters"][key] = state
-    save_config(config)
-
-
-def am_can(member) -> bool:
-    perms = member.guild_permissions
-    return perms.administrator or perms.manage_guild or is_trusted(member.guild, member.id)
-
-
-async def am_guard(interaction: discord.Interaction) -> bool:
-    if isinstance(interaction.user, discord.Member) and am_can(interaction.user):
-        return True
-    await interaction.response.send_message(view=err("You need the Manage Server permission to use this."), ephemeral=True)
-    return False
-
-
-def am_dot(on: bool) -> str:
-    return "🟢" if on else "🔴"
-
-
-def am_normalize(text: str) -> str:
-    decomposed = unicodedata.normalize("NFKD", (text or "").lower())
-    stripped = "".join(c for c in decomposed if not unicodedata.combining(c))
-    return stripped.translate(AM_LEET)
-
-
-def am_word_regex(words: list):
-    key = tuple(words)
-    if AM_CACHE["key"] != key:
-        parts = []
-        for word in words:
-            w = am_normalize(word.strip())
-            if not w:
-                continue
-            if w.endswith("*"):
-                parts.append(re.escape(w[:-1]) + r"[a-z0-9]*")
-            else:
-                parts.append(re.escape(w))
-        AM_CACHE["key"] = key
-        AM_CACHE["regex"] = re.compile(r"(?<![a-z0-9])(?:" + "|".join(parts) + r")(?![a-z0-9])") if parts else None
-    return AM_CACHE["regex"]
-
-
-def am_has_bad_word(text: str) -> bool:
-    regex = am_word_regex(AM_DEFAULT_WORDS + am_cfg()["words"])
-    if regex is None:
-        return False
-    norm = am_normalize(text)
-    squashed = re.sub(r"(.)\1{2,}", r"\1", norm)
-    return bool(regex.search(norm) or regex.search(squashed))
-
-
-def am_scan_status(text: str):
-    if INVITE_RE.search(text):
-        return "an invite link"
-    if AM_SCAM_RE.search(text):
-        return "a scam link"
-    if am_has_bad_word(text):
-        return "a filtered word"
-    return None
-
-
-def am_parse_words(text: str) -> list:
-    found = []
-    for raw in re.split(r"[,\n]", text or ""):
-        w = raw.strip().lower()
-        if 1 <= len(w) <= 50 and w not in found:
-            found.append(w)
-    return found
-
-
-def automod_exempt(member, channel=None) -> bool:
-    perms = member.guild_permissions
-    if perms.administrator or perms.manage_messages:
-        return True
-    if mx_is_staff_member(member):
-        return True
-    if is_trusted(member.guild, member.id):
-        return True
-    cfg = am_cfg()
-    if any(r.id in cfg["exempt_roles"] for r in member.roles):
-        return True
-    if channel is not None:
-        ids = {channel.id}
-        for attr in ("category_id", "parent_id"):
-            value = getattr(channel, attr, None)
-            if value:
-                ids.add(value)
-        if ids & set(cfg["exempt_channels"]):
-            return True
-    return False
-
-
-async def am_log(guild, title: str, body: str):
-    channel_id = am_cfg()["log"]
-    channel = guild.get_channel(channel_id) if channel_id else None
-    if channel is not None:
-        try:
-            await channel.send(view=LogView(title, body), allowed_mentions=NO_MENTIONS)
-            return
-        except Exception:
-            pass
-    await send_security(guild, title, body, ping=False)
-
-
-async def am_member_action(guild, member, rule: str) -> str:
-    cfg = am_cfg()
-    action = cfg["action"]
-    reason = f"AutoMod: {rule}"
-    try:
-        if action == "warn":
-            warns = config.setdefault("warns", {}).setdefault(str(member.id), [])
-            warns.append({"reason": reason, "timestamp": int(time.time()), "moderator_id": bot.user.id})
-            save_config(config)
-            await log_mod(guild, "Warn", bot.user, member, reason, f"**Total Warns:** {len(warns)}")
-            return f"\n**Warn:** #{len(warns)}"
-        if action == "mute":
-            minutes = cfg["mute_minutes"]
-            mark_action("timeout", member.id)
-            await member.timeout(discord.utils.utcnow() + timedelta(minutes=minutes), reason=reason)
-            await log_mod(guild, "Timeout", bot.user, member, reason, f"**Duration:** {minutes} minute(s)")
-            return f"\n**Timeout:** {minutes} minute(s)"
-        if action == "kick":
-            mark_action("kick", member.id)
-            await member.kick(reason=reason)
-            await log_mod(guild, "Kick", bot.user, member, reason)
-            return "\n**Kick:** done"
-        if action == "ban":
-            mark_action("ban", member.id)
-            await guild.ban(member, reason=reason, delete_message_days=0)
-            await log_mod(guild, "Ban", bot.user, member, reason)
-            return "\n**Ban:** done"
-    except Exception:
-        return f"\n**{AM_ACTION_LABELS[action]}:** failed (check bot permissions)"
-    mx_record("AutoMod", bot.user)
-    return ""
-
-
-async def automod_punish(message, rule: str, detail: str, purge_recent: bool = False):
-    guild = message.guild
-    member = message.author
-    try:
-        await message.delete()
-    except Exception:
-        pass
-    if purge_recent:
-        try:
-            mark_action("purge", message.channel.id)
-            await message.channel.purge(
-                limit=25,
-                check=lambda m: m.author.id == member.id,
-                after=discord.utils.utcnow() - timedelta(seconds=60)
-            )
-        except Exception:
-            pass
-    result = await am_member_action(guild, member, rule)
-    try:
-        sent = await message.channel.send(view=InfoView(f"🛡️ AutoMod — {rule}", f"{member.mention}, {detail}"))
-        asyncio.create_task(delete_after(sent, 6))
-    except Exception:
-        pass
-    await am_log(
-        guild,
-        f"🛡️ AutoMod — {rule}",
-        f"**User:** {fmt_ref(member)}\n**Channel:** {message.channel.mention}\n**Action:** {AM_ACTION_LABELS[am_cfg()['action']]}{result}\n\n**Content**\n{quote(message.content or '(empty)', 600)}"
-    )
-
-
-async def automod_check(message, edited: bool = False) -> bool:
-    if not isinstance(message.author, discord.Member) or message.guild is None or message.guild.id != GUILD_ID:
-        return False
-    cfg = am_cfg()
-    if not cfg["enabled"]:
-        return False
-    if automod_exempt(message.author, message.channel):
-        return False
-    content = message.content or ""
-    if am_get("invites") and INVITE_RE.search(content):
-        await automod_punish(message, "Invite Links", "invite links are not allowed here.")
-        return True
-    if am_get("links") and LINK_RE.search(content):
-        await automod_punish(message, "All Links", "links are not allowed here.")
-        return True
-    if am_get("everyone") and re.search(r"@(everyone|here)", content):
-        if not message.channel.permissions_for(message.author).mention_everyone:
-            await automod_punish(message, "@everyone", "you can't use @everyone or @here.")
-            return True
-    if am_get("mention"):
-        limit = sec_cfg("antimention")["limit"]
-        count = len({m.id for m in message.mentions}) + len(message.role_mentions)
-        if count >= limit:
-            await automod_punish(message, "Mass Mention", f"mass mentions are not allowed ({count} mentions).")
-            return True
-    if am_get("spam") and not edited:
-        spam_cfg = sec_cfg("antispam")
-        now = time.time()
-        dq = spam_tracker.setdefault(message.author.id, deque())
-        dq.append(now)
-        while dq and now - dq[0] > spam_cfg["window"]:
-            dq.popleft()
-        if len(dq) >= spam_cfg["messages"]:
-            dq.clear()
-            await automod_punish(message, "Spam", f"slow down — {spam_cfg['messages']}+ messages in {spam_cfg['window']}s.", purge_recent=True)
-            return True
-    if am_get("caps"):
-        clean = re.sub(r"<[^>]+>|https?://\S+", "", content)
-        letters = [c for c in clean if c.isalpha()]
-        if len(letters) >= cfg["caps_min"] and sum(1 for c in letters if c.isupper()) * 100 >= cfg["caps_ratio"] * len(letters):
-            await automod_punish(message, "Excessive Caps", "please don't type in all caps.")
-            return True
-    if am_get("badwords") and am_has_bad_word(content):
-        await automod_punish(message, "Bad Words", "that language is not allowed here.")
-        return True
-    return False
-
-
-def am_status_text(member) -> str:
-    for activity in member.activities:
-        if isinstance(activity, discord.CustomActivity):
-            parts = [activity.name or "", str(activity.emoji) if activity.emoji else ""]
-            return " ".join(p for p in parts if p).strip()
-    return ""
-
-
-@bot.event
-async def on_presence_update(before, after):
-    guild = getattr(after, "guild", None)
-    if guild is None or guild.id != GUILD_ID or after.bot:
-        return
-    cfg = am_cfg()
-    if not cfg["enabled"] or not cfg["filters"]["status"]:
-        return
-    text = am_status_text(after)
-    if not text:
-        AM_STATUS_SEEN.pop(after.id, None)
-        return
-    if AM_STATUS_SEEN.get(after.id) == text:
-        return
-    AM_STATUS_SEEN[after.id] = text
-    if automod_exempt(after):
-        return
-    found = am_scan_status(text)
-    if not found:
-        return
-    result = await am_member_action(guild, after, "Custom Status")
-    await am_log(
-        guild,
-        "🛡️ AutoMod — Custom Status",
-        f"**User:** {fmt_ref(after)}\n**Detail:** custom status contains {found}\n**Action:** {AM_ACTION_LABELS[cfg['action']]}{result}\n\n**Status**\n{quote(text, 400)}"
-    )
-
-
-class AmButton(discord.ui.Button):
-    def __init__(self, label: str, style, handler):
-        super().__init__(label=label, style=style)
-        self.handler = handler
-
-    async def callback(self, interaction: discord.Interaction):
-        if not await am_guard(interaction):
-            return
-        await self.handler(interaction)
-
-
-class AmSelect(discord.ui.Select):
-    def __init__(self, placeholder: str, options: list, handler):
-        super().__init__(placeholder=placeholder, options=options, min_values=1, max_values=1)
-        self.handler = handler
-
-    async def callback(self, interaction: discord.Interaction):
-        if not await am_guard(interaction):
-            return
-        await self.handler(interaction, self.values[0])
-
-
-class AmRoleSelect(discord.ui.RoleSelect):
-    def __init__(self, placeholder: str, defaults: list, handler):
-        super().__init__(placeholder=placeholder, min_values=0, max_values=25, default_values=defaults)
-        self.handler = handler
-
-    async def callback(self, interaction: discord.Interaction):
-        if not await am_guard(interaction):
-            return
-        await self.handler(interaction, [r.id for r in self.values])
-
-
-class AmChannelSelect(discord.ui.ChannelSelect):
-    def __init__(self, placeholder: str, defaults: list, handler, types: list, max_values: int = 25):
-        super().__init__(placeholder=placeholder, channel_types=types, min_values=0, max_values=max_values, default_values=defaults)
-        self.handler = handler
-
-    async def callback(self, interaction: discord.Interaction):
-        if not await am_guard(interaction):
-            return
-        await self.handler(interaction, [c.id for c in self.values])
-
-
-class AmWordsModal(discord.ui.Modal):
-    def __init__(self, adding: bool):
-        super().__init__(title="Add Words" if adding else "Remove Words")
-        self.adding = adding
-        self.words = discord.ui.TextInput(
-            label="Words (comma or new line separated)",
-            style=discord.TextStyle.paragraph,
-            max_length=1500,
-            required=True
-        )
-        self.add_item(self.words)
-
-    async def on_submit(self, interaction: discord.Interaction):
-        if not await am_guard(interaction):
-            return
-        cfg = am_cfg()
-        parsed = am_parse_words(self.words.value)
-        if self.adding:
-            for w in parsed:
-                if w not in cfg["words"] and len(cfg["words"]) < 200:
-                    cfg["words"].append(w)
-        else:
-            cfg["words"] = [w for w in cfg["words"] if w not in parsed]
-        save_config(config)
-        await interaction.response.edit_message(view=AutoModExemptView(interaction.guild))
-
-
-def am_status_note() -> str:
-    if am_cfg()["filters"]["status"] and not bot.intents.presences:
-        return "\n-# Custom Status needs the Presence Intent. Enable it in the Developer Portal and set PRESENCE_INTENT=1."
-    return ""
-
-
-class AutoModView(discord.ui.LayoutView):
-    def __init__(self, guild):
-        super().__init__(timeout=600)
-        cfg = am_cfg()
-        enabled = cfg["enabled"]
-        log = f"<#{cfg['log']}>" if cfg["log"] else "*none*"
-        header = (
-            f"## AutoMod {am_dot(enabled)} {'Enabled' if enabled else 'Disabled'}\n"
-            f"Action on violation: `{AM_ACTION_LABELS[cfg['action']]}` · Custom words: {len(cfg['words'])} · Log: {log}"
-        )
-        lines = "\n".join(f"{am_dot(am_get(k))} **{label}**: {desc}" for k, label, desc in AM_FILTERS)
-        hint = "-# Toggle filters below. Add words with `/automod addword`, set punishment with `/automod action`." + am_status_note()
-
-        async def toggle_enabled(interaction):
-            am_cfg()["enabled"] = not am_cfg()["enabled"]
-            save_config(config)
-            await interaction.response.edit_message(view=AutoModView(interaction.guild))
-
-        async def open_exempt(interaction):
-            await interaction.response.edit_message(view=AutoModExemptView(interaction.guild))
-
-        async def toggle_filter(interaction, key):
-            am_set(key, not am_get(key))
-            await interaction.response.edit_message(view=AutoModView(interaction.guild))
-
-        async def set_action(interaction, key):
-            am_cfg()["action"] = key
-            save_config(config)
-            await interaction.response.edit_message(view=AutoModView(interaction.guild))
-
-        async def back(interaction):
-            await interaction.response.edit_message(view=ModulesView(interaction.guild))
-
-        filter_options = [
-            discord.SelectOption(label=label, value=key, description="ON" if am_get(key) else "OFF")
-            for key, label, _ in AM_FILTERS
-        ]
-        action_options = [
-            discord.SelectOption(label=label, value=key, default=key == cfg["action"])
-            for key, label in AM_ACTIONS
-        ]
-        self.add_item(
-            discord.ui.Container(
-                discord.ui.TextDisplay(header),
-                discord.ui.Separator(),
-                discord.ui.TextDisplay(lines),
-                discord.ui.Separator(),
-                discord.ui.TextDisplay(hint),
-                discord.ui.ActionRow(
-                    AmButton("Disable" if enabled else "Enable", discord.ButtonStyle.danger if enabled else discord.ButtonStyle.success, toggle_enabled),
-                    AmButton("Exemptions & Words", discord.ButtonStyle.secondary, open_exempt)
-                ),
-                discord.ui.ActionRow(AmSelect("Toggle a filter...", filter_options, toggle_filter)),
-                discord.ui.ActionRow(AmSelect("Set punishment...", action_options, set_action)),
-                discord.ui.ActionRow(AmButton("Back to Modules", discord.ButtonStyle.secondary, back))
-            )
-        )
-
-
-class AutoModExemptView(discord.ui.LayoutView):
-    def __init__(self, guild):
-        super().__init__(timeout=600)
-        cfg = am_cfg()
-        roles = [r for r in (guild.get_role(i) for i in cfg["exempt_roles"]) if r is not None][:25]
-        channels = [c for c in (guild.get_channel(i) for i in cfg["exempt_channels"]) if c is not None][:25]
-        log_channel = guild.get_channel(cfg["log"]) if cfg["log"] else None
-        role_text = " ".join(r.mention for r in roles) or "*none*"
-        channel_text = " ".join(c.mention for c in channels) or "*none*"
-        words_text = ", ".join(f"`{w}`" for w in cfg["words"]) or "*none*"
-        body = (
-            f"**Exempt roles:** {role_text}\n"
-            f"**Exempt channels:** {channel_text}\n"
-            f"**Custom words ({len(cfg['words'])}):** {clip(words_text, 900)}\n"
-            f"**Log channel:** {log_channel.mention if log_channel else '*none*'}\n"
-            f"**Mute length:** {cfg['mute_minutes']} minute(s)"
-        )
-
-        async def set_roles(interaction, ids):
-            am_cfg()["exempt_roles"] = ids
-            save_config(config)
-            await interaction.response.edit_message(view=AutoModExemptView(interaction.guild))
-
-        async def set_channels(interaction, ids):
-            am_cfg()["exempt_channels"] = ids
-            save_config(config)
-            await interaction.response.edit_message(view=AutoModExemptView(interaction.guild))
-
-        async def set_log(interaction, ids):
-            am_cfg()["log"] = ids[0] if ids else 0
-            save_config(config)
-            await interaction.response.edit_message(view=AutoModExemptView(interaction.guild))
-
-        async def add_words(interaction):
-            await interaction.response.send_modal(AmWordsModal(True))
-
-        async def remove_words(interaction):
-            await interaction.response.send_modal(AmWordsModal(False))
-
-        async def back(interaction):
-            await interaction.response.edit_message(view=AutoModView(interaction.guild))
-
-        exempt_types = [discord.ChannelType.text, discord.ChannelType.voice, discord.ChannelType.category, discord.ChannelType.news, discord.ChannelType.forum]
-        self.add_item(
-            discord.ui.Container(
-                discord.ui.TextDisplay("## AutoMod: Exemptions & Words"),
-                discord.ui.Separator(),
-                discord.ui.TextDisplay(body),
-                discord.ui.Separator(),
-                discord.ui.ActionRow(AmRoleSelect("Exempt roles...", roles, set_roles)),
-                discord.ui.ActionRow(AmChannelSelect("Exempt channels...", channels, set_channels, exempt_types)),
-                discord.ui.ActionRow(AmChannelSelect("Log channel...", [log_channel] if log_channel else [], set_log, [discord.ChannelType.text], 1)),
-                discord.ui.ActionRow(
-                    AmButton("Add Words", discord.ButtonStyle.secondary, add_words),
-                    AmButton("Remove Words", discord.ButtonStyle.secondary, remove_words),
-                    AmButton("Back", discord.ButtonStyle.primary, back)
-                )
-            )
-        )
-
-
-class ModulesView(discord.ui.LayoutView):
-    def __init__(self, guild):
-        super().__init__(timeout=600)
-        lines = [
-            f"{am_dot(am_cfg()['enabled'])} **AutoMod**: Filters, punishments and exemptions",
-            f"{am_dot(sec_cfg('antiraid')['enabled'])} **Anti-Raid**: Detect and stop join raids",
-            f"{am_dot(sec_cfg('antinuke')['enabled'])} **Anti-Nuke**: Stop mass deletions and unauthorized changes",
-        ]
-
-        async def open_automod(interaction):
-            await interaction.response.edit_message(view=AutoModView(interaction.guild))
-
-        async def open_security(interaction):
-            await interaction.response.send_message(view=security_status_view(interaction.guild), ephemeral=True)
-
-        self.add_item(
-            discord.ui.Container(
-                discord.ui.TextDisplay("## Modules\nPick a module to configure."),
-                discord.ui.Separator(),
-                discord.ui.TextDisplay("\n".join(lines)),
-                discord.ui.Separator(),
-                discord.ui.ActionRow(
-                    AmButton("AutoMod", discord.ButtonStyle.primary, open_automod),
-                    AmButton("Security Status", discord.ButtonStyle.secondary, open_security)
-                )
-            )
-        )
-
-
-def am_resolve_filter(text: str):
-    t = (text or "").lower().replace(" ", "").replace("-", "").replace("_", "")
-    aliases = {"profanity": "badwords", "words": "badwords", "mentions": "mention", "massmention": "mention", "invite": "invites", "link": "links", "alllinks": "links", "invitelinks": "invites", "capslock": "caps", "excessivecaps": "caps", "customstatus": "status"}
-    t = aliases.get(t, t)
-    return t if t in AM_FILTER_KEYS else None
-
-
-def am_do_toggle(enabled: bool):
-    am_cfg()["enabled"] = enabled
-    save_config(config)
-    return ok("AutoMod", f"AutoMod is now **{'enabled' if enabled else 'disabled'}**.")
-
-
-def am_do_action(key: str):
-    key = (key or "").lower().replace("delete +", "").replace("delete only", "delete").strip()
-    if key not in AM_ACTION_LABELS:
-        return err("Action must be one of: delete, warn, mute, kick, ban.")
-    am_cfg()["action"] = key
-    save_config(config)
-    return ok("AutoMod Punishment", f"Action on violation: **{AM_ACTION_LABELS[key]}**")
-
-
-def am_do_mute(minutes: int):
-    minutes = clamp(minutes, 1, 40320)
-    am_cfg()["mute_minutes"] = minutes
-    save_config(config)
-    return ok("AutoMod Mute Length", f"Muted members are timed out for **{minutes}** minute(s).")
-
-
-def am_do_words(adding: bool, text: str):
-    parsed = am_parse_words(text)
-    if not parsed:
-        return err("Provide at least one word.")
-    cfg = am_cfg()
-    if adding:
-        added = [w for w in parsed if w not in cfg["words"]][: max(0, 200 - len(cfg["words"]))]
-        cfg["words"].extend(added)
-        save_config(config)
-        return ok("Words Added", f"Added **{len(added)}** word(s). Total custom words: {len(cfg['words'])}")
-    before = len(cfg["words"])
-    cfg["words"] = [w for w in cfg["words"] if w not in parsed]
-    save_config(config)
-    return ok("Words Removed", f"Removed **{before - len(cfg['words'])}** word(s). Total custom words: {len(cfg['words'])}")
-
-
-def am_do_list_words():
-    words = am_cfg()["words"]
-    return ok("Custom Words", clip(", ".join(f"`{w}`" for w in words), 3500) if words else "No custom words yet. Wildcards work with `word*`.")
-
-
-def am_do_log(channel):
-    am_cfg()["log"] = channel.id if channel else 0
-    save_config(config)
-    return ok("AutoMod Log", f"Log channel: {channel.mention}" if channel else "Log channel removed. Alerts go to the security log.")
-
-
-def am_do_filter(key: str, state: bool):
-    am_set(key, state)
-    label = next(l for k, l, _ in AM_FILTERS if k == key)
-    return ok("AutoMod Filter", f"**{label}** is now **{'on' if state else 'off'}**." + am_status_note())
-
-
-def am_do_exempt(role=None, channel=None):
-    cfg = am_cfg()
-    if role is not None:
-        ids = cfg["exempt_roles"]
-        target, label = role.id, role.mention
-    elif channel is not None:
-        ids = cfg["exempt_channels"]
-        target, label = channel.id, channel.mention
-    else:
-        return err("Provide a role or a channel.")
-    if target in ids:
-        ids.remove(target)
-        state = "no longer exempt"
-    else:
-        ids.append(target)
-        state = "now exempt"
-    save_config(config)
-    return ok("AutoMod Exemption", f"{label} is {state}.")
-
-
-async def am_prefix(message: discord.Message, cmd: str, args: list) -> bool:
-    if cmd not in ("automod", "modules"):
-        return False
-    send = message.channel.send
-    if not am_can(message.author):
-        await send(view=err("You need the Manage Server permission to use this."))
-        return True
-    if cmd == "modules":
-        await send(view=ModulesView(message.guild))
-        return True
-    sub = args[1].lower() if len(args) > 1 else "panel"
-    rest = " ".join(args[2:])
-    usage = f"Usage: `{PREFIX}automod [on|off|action|mute|addword|removeword|words|log|filter|exempt]`"
-    if sub in ("panel", "menu"):
-        await send(view=AutoModView(message.guild))
-    elif sub in ("on", "enable"):
-        await send(view=am_do_toggle(True))
-    elif sub in ("off", "disable"):
-        await send(view=am_do_toggle(False))
-    elif sub == "action":
-        await send(view=am_do_action(rest) if rest else err(f"Usage: `{PREFIX}automod action <delete|warn|mute|kick|ban>`"))
-    elif sub == "mute":
-        await send(view=am_do_mute(int(args[2])) if len(args) > 2 and args[2].isdigit() else err(f"Usage: `{PREFIX}automod mute <minutes>`"))
-    elif sub in ("addword", "removeword"):
-        await send(view=am_do_words(sub == "addword", rest) if rest else err(f"Usage: `{PREFIX}automod {sub} <word, word>`"))
-    elif sub == "words":
-        await send(view=am_do_list_words())
-    elif sub == "log":
-        if rest.lower() in ("off", "none", "remove"):
-            await send(view=am_do_log(None))
-        elif message.channel_mentions:
-            await send(view=am_do_log(message.channel_mentions[0]))
-        else:
-            await send(view=err(f"Usage: `{PREFIX}automod log #channel|off`"))
-    elif sub == "filter":
-        key = am_resolve_filter(args[2]) if len(args) > 2 else None
-        state = args[3].lower() if len(args) > 3 else ""
-        if key is None or state not in ("on", "off"):
-            await send(view=err(f"Usage: `{PREFIX}automod filter <{'|'.join(AM_FILTER_KEYS)}> <on|off>`"))
-        else:
-            await send(view=am_do_filter(key, state == "on"))
-    elif sub == "exempt":
-        if message.role_mentions or message.channel_mentions:
-            await send(view=am_do_exempt(mx_first(message.role_mentions), mx_first(message.channel_mentions)))
-        else:
-            await send(view=err(f"Usage: `{PREFIX}automod exempt @role|#channel` (run again to remove)"))
-    else:
-        await send(view=err(usage))
-    return True
-
-
-automod_group = discord.app_commands.Group(
-    name="automod",
-    description="Configure AutoMod",
-    default_permissions=discord.Permissions(manage_guild=True)
-)
-AM_ACTION_CHOICES = [discord.app_commands.Choice(name=label, value=key) for key, label in AM_ACTIONS]
-AM_FILTER_CHOICES = [discord.app_commands.Choice(name=label, value=key) for key, label, _ in AM_FILTERS]
-
-
-async def am_slash_send(interaction: discord.Interaction, view, ephemeral: bool = False):
-    if not isinstance(interaction.user, discord.Member) or not am_can(interaction.user):
-        await interaction.response.send_message(view=err("You need the Manage Server permission to use this."), ephemeral=True)
-        return
-    await interaction.response.send_message(view=view, ephemeral=ephemeral)
-
-
-@automod_group.command(name="panel", description="Open the AutoMod panel")
-async def am_slash_panel(interaction: discord.Interaction):
-    await am_slash_send(interaction, AutoModView(interaction.guild))
-
-
-@automod_group.command(name="toggle", description="Enable or disable AutoMod")
-@discord.app_commands.describe(enabled="Turn AutoMod on or off")
-async def am_slash_toggle(interaction: discord.Interaction, enabled: bool):
-    if not am_can(interaction.user):
-        return await am_slash_send(interaction, None)
-    await am_slash_send(interaction, am_do_toggle(enabled))
-
-
-@automod_group.command(name="action", description="Set the punishment for violations")
-@discord.app_commands.describe(action="What happens when someone breaks a filter")
-@discord.app_commands.choices(action=AM_ACTION_CHOICES)
-async def am_slash_action(interaction: discord.Interaction, action: discord.app_commands.Choice[str]):
-    if not am_can(interaction.user):
-        return await am_slash_send(interaction, None)
-    await am_slash_send(interaction, am_do_action(action.value))
-
-
-@automod_group.command(name="mute", description="Set how long Delete + Mute times people out")
-@discord.app_commands.describe(minutes="Timeout length in minutes")
-async def am_slash_mute(interaction: discord.Interaction, minutes: int):
-    if not am_can(interaction.user):
-        return await am_slash_send(interaction, None)
-    await am_slash_send(interaction, am_do_mute(minutes))
-
-
-@automod_group.command(name="addword", description="Add custom filtered words")
-@discord.app_commands.describe(words="Words separated by commas. Use word* for wildcards")
-async def am_slash_addword(interaction: discord.Interaction, words: str):
-    if not am_can(interaction.user):
-        return await am_slash_send(interaction, None)
-    await am_slash_send(interaction, am_do_words(True, words), True)
-
-
-@automod_group.command(name="removeword", description="Remove custom filtered words")
-@discord.app_commands.describe(words="Words separated by commas")
-async def am_slash_removeword(interaction: discord.Interaction, words: str):
-    if not am_can(interaction.user):
-        return await am_slash_send(interaction, None)
-    await am_slash_send(interaction, am_do_words(False, words), True)
-
-
-@automod_group.command(name="words", description="List custom filtered words")
-async def am_slash_words(interaction: discord.Interaction):
-    if not am_can(interaction.user):
-        return await am_slash_send(interaction, None)
-    await am_slash_send(interaction, am_do_list_words(), True)
-
-
-@automod_group.command(name="log", description="Set the AutoMod log channel")
-@discord.app_commands.describe(channel="Log channel (leave empty to remove)")
-async def am_slash_log(interaction: discord.Interaction, channel: discord.TextChannel = None):
-    if not am_can(interaction.user):
-        return await am_slash_send(interaction, None)
-    await am_slash_send(interaction, am_do_log(channel))
-
-
-@automod_group.command(name="filter", description="Turn a single filter on or off")
-@discord.app_commands.describe(filter="Filter to change", enabled="On or off")
-@discord.app_commands.choices(filter=AM_FILTER_CHOICES)
-async def am_slash_filter(interaction: discord.Interaction, filter: discord.app_commands.Choice[str], enabled: bool):
-    if not am_can(interaction.user):
-        return await am_slash_send(interaction, None)
-    await am_slash_send(interaction, am_do_filter(filter.value, enabled))
-
-
-@automod_group.command(name="exempt", description="Toggle a role or channel as exempt from AutoMod")
-@discord.app_commands.describe(role="Role to exempt or un-exempt", channel="Channel to exempt or un-exempt")
-async def am_slash_exempt(interaction: discord.Interaction, role: discord.Role = None, channel: discord.TextChannel = None):
-    if not am_can(interaction.user):
-        return await am_slash_send(interaction, None)
-    await am_slash_send(interaction, am_do_exempt(role, channel))
-
-
-tree.add_command(automod_group, guild=discord.Object(id=GUILD_ID))
-
-
-@tree.command(name="modules", description="Open the modules menu", guild=GUILD_OBJ)
-@discord.app_commands.default_permissions(manage_guild=True)
-async def modules_slash(interaction: discord.Interaction):
-    await am_slash_send(interaction, ModulesView(interaction.guild))
 
 
 @bot.event
